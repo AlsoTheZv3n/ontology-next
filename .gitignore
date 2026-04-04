@@ -2,9 +2,10 @@
 # NEXO Ontology Engine - .gitignore
 # ============================================
 
-# ---------- Design & Documentation ----------
+# ---------- Design, Documentation & Internal ----------
 design/
 doc/
+todo/
 *.zip
 
 # ---------- Environment & Secrets ----------
