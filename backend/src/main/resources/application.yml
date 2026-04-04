@@ -35,6 +35,15 @@ spring:
 server:
   port: ${SERVER_PORT:8081}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  metrics:
+    tags:
+      application: nexo-ontology
+
 nexo:
   n8n:
     webhook-secret: ${N8N_WEBHOOK_SECRET:nexo-n8n-secret}

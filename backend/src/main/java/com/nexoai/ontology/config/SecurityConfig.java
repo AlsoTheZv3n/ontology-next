@@ -47,6 +47,7 @@ public class SecurityConfig implements WebMvcConfigurer {
                 .requestMatchers("/api/v1/inbound/n8n/**").permitAll()
                 .requestMatchers("/graphiql/**").permitAll()
                 .requestMatchers("/ws/**").permitAll()
+                .requestMatchers("/actuator/**").permitAll()
                 .requestMatchers("/graphql").authenticated()
                 .requestMatchers("/api/v1/**").authenticated()
                 .requestMatchers("/api/admin/**").hasRole("SUPER_ADMIN")
