@@ -65,11 +65,7 @@ ALTER TABLE schema_versions FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation_schema_versions ON schema_versions
     USING (tenant_id = current_tenant_id() OR current_tenant_id() IS NULL);
 
--- schema_migrations
-ALTER TABLE schema_migrations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE schema_migrations FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation_schema_migrations ON schema_migrations
-    USING (tenant_id = current_tenant_id() OR current_tenant_id() IS NULL);
+-- schema_migrations: NO tenant_id column, skip RLS
 
 -- object_history
 ALTER TABLE object_history ENABLE ROW LEVEL SECURITY;

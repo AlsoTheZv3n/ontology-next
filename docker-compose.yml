@@ -1,0 +1,96 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: nexo-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-nexo_ontology}
+      POSTGRES_USER: ${POSTGRES_USER:-nexo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nexo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nexo-backend
+    ports:
+      - "${SERVER_PORT:-8081}:8081"
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-nexo_ontology}
+      DB_USERNAME: ${POSTGRES_USER:-nexo}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      N8N_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-changeme}
+      REDIS_HOST: redis
+      CDC_ENABLED: ${CDC_ENABLED:-false}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: nexo-n8n
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_BASIC_AUTH_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_BASIC_AUTH_PASSWORD:?Set N8N_BASIC_AUTH_PASSWORD in .env}
+      NEXO_WEBHOOK_SECRET: ${N8N_WEBHOOK_SECRET:-changeme}
+      N8N_HOST: localhost
+      WEBHOOK_URL: http://localhost:5678
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: nexo-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  debezium:
+    image: debezium/server:2.5
+    container_name: nexo-debezium
+    ports:
+      - "8083:8083"
+    environment:
+      DEBEZIUM_SOURCE_CONNECTOR_CLASS: io.debezium.connector.postgresql.PostgresConnector
+      DEBEZIUM_SOURCE_DATABASE_HOSTNAME: ${CUSTOMER_DB_HOST:-localhost}
+      DEBEZIUM_SOURCE_DATABASE_PORT: "5432"
+      DEBEZIUM_SOURCE_DATABASE_USER: ${CUSTOMER_DB_USER:-nexo}
+      DEBEZIUM_SOURCE_DATABASE_PASSWORD: ${CUSTOMER_DB_PASSWORD:-nexo_secret}
+      DEBEZIUM_SOURCE_DATABASE_DBNAME: ${CUSTOMER_DB_NAME:-nexo_ontology}
+      DEBEZIUM_SOURCE_PLUGIN_NAME: pgoutput
+      DEBEZIUM_SINK_TYPE: redis
+      DEBEZIUM_SINK_REDIS_ADDRESS: redis:6379
+      DEBEZIUM_SINK_REDIS_KEY: "ontology:cdc"
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - cdc
+
+volumes:
+  postgres_data:
+  n8n_data:
+  redis_data:
