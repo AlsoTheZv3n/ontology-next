@@ -80,13 +80,13 @@ export function Sidebar() {
           <Settings size={17} />
           Settings
         </NavLink>
-        <a
-          href="#"
+        <NavLink
+          to="/support"
           className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium text-slate-400 hover:bg-slate-800/40 hover:text-on-surface transition-colors"
         >
           <HelpCircle size={17} />
           Support
-        </a>
+        </NavLink>
       </div>
 
       {/* User Card */}
