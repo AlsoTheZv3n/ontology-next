@@ -1,4 +1,4 @@
-import { HelpCircle, BookOpen, MessageCircle, ExternalLink, Github, Mail } from 'lucide-react'
+import { HelpCircle, BookOpen, MessageCircle, ExternalLink, Code2, Mail } from 'lucide-react'
 
 function SupportCard({ icon: Icon, title, description, action, href }: {
   icon: React.ElementType; title: string; description: string; action: string; href?: string
@@ -52,7 +52,7 @@ export function SupportPage() {
         />
 
         <SupportCard
-          icon={Github}
+          icon={Code2}
           title="GitHub Repository"
           description="View source code, report issues, and contribute to the project."
           action="View on GitHub"
