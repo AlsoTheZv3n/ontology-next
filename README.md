@@ -212,4 +212,4 @@ See [PLACEHOLDERS.md](PLACEHOLDERS.md) for all items that need replacement befor
 
 ## License
 
-Proprietary — NEXO AI
+MIT
