@@ -1,6 +1,6 @@
 # NEXO Ontology Engine
 
-A production-ready, multi-tenant Ontology Engine built on open-source technologies — comparable to Palantir Foundry, designed for Swiss SMEs.
+A production-ready, multi-tenant Ontology Engine built on open-source technologies, designed for Swiss SMEs.
 
 ## Architecture
 
