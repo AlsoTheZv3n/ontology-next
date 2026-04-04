@@ -53,6 +53,9 @@ public class DataSourceDefinitionEntity {
     @Column(name = "last_synced_at")
     private Instant lastSyncedAt;
 
+    @Column(name = "source_table")
+    private String sourceTable;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;

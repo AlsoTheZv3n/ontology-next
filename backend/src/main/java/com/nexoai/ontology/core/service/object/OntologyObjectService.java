@@ -90,6 +90,15 @@ public class OntologyObjectService {
         return toDomain(saved, typeName);
     }
 
+    @Transactional(readOnly = true)
+    public Optional<OntologyObject> findByExternalId(String externalId) {
+        // Search across all data sources for any object with this externalId
+        return objectRepository.findAll().stream()
+                .filter(o -> externalId.equals(o.getExternalId()))
+                .findFirst()
+                .map(e -> toDomain(e, resolveObjectTypeName(e.getObjectTypeId())));
+    }
+
     public boolean deleteObject(String objectTypeName, UUID objectId) {
         if (!objectRepository.existsById(objectId)) {
             throw new OntologyException("Object not found: " + objectId);

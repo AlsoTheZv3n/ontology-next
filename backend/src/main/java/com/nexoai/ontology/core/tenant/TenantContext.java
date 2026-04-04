@@ -19,6 +19,14 @@ public class TenantContext {
         return id != null ? id : DEFAULT_TENANT_ID;
     }
 
+    /**
+     * Returns the current tenant ID, or null if none is set.
+     * Useful for RLS policy integration where null means "no tenant filter".
+     */
+    public static UUID getTenantIdOrNull() {
+        return CURRENT_TENANT.get();
+    }
+
     public static void setCurrentUser(String email) {
         CURRENT_USER.set(email);
     }

@@ -3,9 +3,11 @@ package com.nexoai.ontology.core.agent;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexoai.ontology.adapters.out.persistence.entity.*;
 import com.nexoai.ontology.adapters.out.persistence.repository.*;
+import com.nexoai.ontology.config.websocket.WebSocketPublisher;
+import com.nexoai.ontology.core.agent.llm.*;
+import com.nexoai.ontology.core.cdc.ObjectChangeEvent;
 import com.nexoai.ontology.core.service.action.ActionEngine;
 import com.nexoai.ontology.core.tenant.TenantContext;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -15,7 +17,6 @@ import java.time.Instant;
 import java.util.*;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 @Transactional
 public class AgentSessionService {
@@ -26,6 +27,33 @@ public class AgentSessionService {
     private final OntologyAgentTools agentTools;
     private final ActionEngine actionEngine;
     private final ObjectMapper objectMapper;
+    private final LlmProvider llmProvider;
+    private final WebSocketPublisher wsPublisher;
+
+    private static final String SYSTEM_PROMPT = """
+            You are the NEXO Ontology Agent. You help users explore and manage their ontology data.
+            You can search objects, traverse relationships, and compute aggregations.
+            Respond in the same language the user writes in. Be concise and helpful.
+            """;
+
+    public AgentSessionService(
+            JpaAgentSessionRepository sessionRepository,
+            JpaPendingApprovalRepository approvalRepository,
+            JpaAgentAuditLogRepository auditLogRepository,
+            OntologyAgentTools agentTools,
+            ActionEngine actionEngine,
+            ObjectMapper objectMapper,
+            Optional<LlmProvider> llmProvider,
+            WebSocketPublisher wsPublisher) {
+        this.sessionRepository = sessionRepository;
+        this.approvalRepository = approvalRepository;
+        this.auditLogRepository = auditLogRepository;
+        this.agentTools = agentTools;
+        this.actionEngine = actionEngine;
+        this.objectMapper = objectMapper;
+        this.llmProvider = llmProvider.orElse(null);
+        this.wsPublisher = wsPublisher;
+    }
 
     public Map<String, Object> startSession() {
         var session = sessionRepository.save(AgentSessionEntity.builder()
@@ -50,12 +78,15 @@ public class AgentSessionService {
                     .build());
         }
 
-        // Process the message using tool routing
+        // Load conversation history from DB (Fix 10e)
+        List<LlmMessage> conversationHistory = loadHistory(session.getId());
+
+        // Process the message using LLM or keyword routing
         List<Map<String, Object>> toolCalls = new ArrayList<>();
         String agentResponse;
 
         try {
-            agentResponse = processMessage(userMessage, toolCalls);
+            agentResponse = processMessageWithLlm(userMessage, toolCalls, conversationHistory);
         } catch (Exception e) {
             log.error("Agent processing failed: {}", e.getMessage());
             agentResponse = "Entschuldigung, bei der Verarbeitung ist ein Fehler aufgetreten: " + e.getMessage();
@@ -76,6 +107,14 @@ public class AgentSessionService {
 
         // Check for pending approvals
         var pendingApprovals = approvalRepository.findBySessionIdAndStatus(session.getId(), "PENDING");
+
+        // Fix 10f: broadcast when there are pending approvals
+        if (!pendingApprovals.isEmpty()) {
+            wsPublisher.broadcastChange(ObjectChangeEvent.builder()
+                    .operation("PENDING_APPROVAL")
+                    .timestamp(Instant.now())
+                    .build());
+        }
 
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("message", agentResponse);
@@ -133,6 +172,45 @@ public class AgentSessionService {
                     m.put("performedAt", e.getPerformedAt());
                     return m;
                 }).toList();
+    }
+
+    /**
+     * Load conversation history from the audit log for context (Fix 10e).
+     */
+    private List<LlmMessage> loadHistory(UUID sessionId) {
+        List<LlmMessage> history = new ArrayList<>();
+        var auditEntries = auditLogRepository.findBySessionIdOrderByPerformedAtDesc(sessionId);
+        // Reverse to get chronological order, take last 20 turns max
+        var entries = auditEntries.subList(0, Math.min(auditEntries.size(), 20));
+        Collections.reverse(entries);
+        for (var entry : entries) {
+            if (entry.getUserMessage() != null) {
+                history.add(LlmMessage.user(entry.getUserMessage()));
+            }
+            if (entry.getAgentResponse() != null) {
+                history.add(LlmMessage.assistant(entry.getAgentResponse()));
+            }
+        }
+        return history;
+    }
+
+    /**
+     * Try to use the LLM provider if available, otherwise fall back to keyword routing.
+     */
+    private String processMessageWithLlm(String userMessage, List<Map<String, Object>> toolCalls,
+                                          List<LlmMessage> conversationHistory) {
+        if (llmProvider != null && llmProvider.isAvailable()) {
+            List<LlmMessage> messages = new ArrayList<>(conversationHistory);
+            messages.add(LlmMessage.user(userMessage));
+
+            LlmResponse response = llmProvider.chat(SYSTEM_PROMPT, messages);
+            if (response != null && response.content() != null && !response.content().isBlank()) {
+                return response.content();
+            }
+        }
+
+        // Fall back to keyword routing
+        return processMessage(userMessage, toolCalls);
     }
 
     /**

@@ -2,6 +2,9 @@ package com.nexoai.ontology.core.cdc;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nexoai.ontology.adapters.out.persistence.entity.OntologyObjectEntity;
+import com.nexoai.ontology.adapters.out.persistence.repository.JpaDataSourceRepository;
+import com.nexoai.ontology.adapters.out.persistence.repository.JpaOntologyObjectRepository;
 import com.nexoai.ontology.config.websocket.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +34,8 @@ public class CdcEventConsumer {
     private final ConflictResolutionService conflictResolution;
     private final WebSocketPublisher wsPublisher;
     private final JdbcTemplate jdbcTemplate;
+    private final JpaDataSourceRepository dataSourceRepository;
+    private final JpaOntologyObjectRepository objectRepository;
 
     private static final String STREAM_KEY = "ontology:cdc";
     private static final String GROUP_NAME = "nexo-group";
@@ -57,7 +62,7 @@ public class CdcEventConsumer {
                 }
             }
         } catch (Exception e) {
-            // Redis not available or stream doesn't exist yet — silently skip
+            // Redis not available or stream doesn't exist yet -- silently skip
             log.trace("CDC consumer poll skipped: {}", e.getMessage());
         }
     }
@@ -66,9 +71,52 @@ public class CdcEventConsumer {
         Map<Object, Object> values = record.getValue();
         String operation = String.valueOf(values.getOrDefault("operation", "u"));
         String data = String.valueOf(values.getOrDefault("data", "{}"));
+        String sourceTable = String.valueOf(values.getOrDefault("source_table", ""));
         JsonNode payload = objectMapper.readTree(data);
 
-        log.info("Processing CDC event: op={}, record={}", operation, record.getId());
+        log.info("Processing CDC event: op={}, source_table={}, record={}", operation, sourceTable, record.getId());
+
+        // Look up a data source definition that maps this source_table
+        var dataSourceOpt = sourceTable.isBlank()
+                ? java.util.Optional.<com.nexoai.ontology.adapters.out.persistence.entity.DataSourceDefinitionEntity>empty()
+                : dataSourceRepository.findBySourceTable(sourceTable);
+
+        if (dataSourceOpt.isPresent()) {
+            var dataSource = dataSourceOpt.get();
+            String externalId = payload.has("id") ? payload.get("id").asText() : null;
+
+            if (externalId != null && dataSource.getObjectTypeId() != null) {
+                if ("d".equalsIgnoreCase(operation)) {
+                    // Delete
+                    objectRepository.findByExternalIdAndDataSourceId(externalId, dataSource.getId())
+                            .ifPresent(obj -> {
+                                objectRepository.delete(obj);
+                                log.info("CDC deleted object externalId={}", externalId);
+                            });
+                } else {
+                    // Upsert (create or update)
+                    var existing = objectRepository.findByExternalIdAndDataSourceId(externalId, dataSource.getId());
+                    if (existing.isPresent()) {
+                        var entity = existing.get();
+                        entity.setProperties(payload.toString());
+                        entity.setUpdatedAt(Instant.now());
+                        objectRepository.save(entity);
+                        log.info("CDC updated object externalId={}", externalId);
+                    } else {
+                        var entity = OntologyObjectEntity.builder()
+                                .objectTypeId(dataSource.getObjectTypeId())
+                                .externalId(externalId)
+                                .dataSourceId(dataSource.getId())
+                                .properties(payload.toString())
+                                .createdAt(Instant.now())
+                                .updatedAt(Instant.now())
+                                .build();
+                        objectRepository.save(entity);
+                        log.info("CDC created object externalId={}", externalId);
+                    }
+                }
+            }
+        }
 
         // Publish to WebSocket for live frontend updates
         wsPublisher.broadcastChange(ObjectChangeEvent.builder()

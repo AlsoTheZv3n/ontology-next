@@ -1,5 +1,6 @@
 package com.nexoai.ontology.core.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexoai.ontology.core.domain.*;
 import com.nexoai.ontology.core.domain.ports.in.ManageLinkTypeUseCase.CreateLinkTypeCommand;
 import com.nexoai.ontology.core.domain.ports.in.RegisterObjectTypeUseCase.PropertyTypeCommand;
@@ -11,12 +12,14 @@ import com.nexoai.ontology.core.domain.ports.out.PropertyTypeRepository;
 import com.nexoai.ontology.core.exception.DuplicateApiNameException;
 import com.nexoai.ontology.core.exception.ObjectTypeNotFoundException;
 import com.nexoai.ontology.core.exception.OntologyException;
+import com.nexoai.ontology.core.versioning.SchemaVersioningService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
@@ -40,6 +43,12 @@ class OntologyRegistryServiceTest {
 
     @Mock
     private LinkTypeRepository linkTypeRepository;
+
+    @Mock
+    private SchemaVersioningService schemaVersioningService;
+
+    @Spy
+    private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private OntologyRegistryService service;

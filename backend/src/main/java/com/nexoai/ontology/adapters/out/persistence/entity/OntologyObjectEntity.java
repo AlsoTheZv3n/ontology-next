@@ -1,9 +1,11 @@
 package com.nexoai.ontology.adapters.out.persistence.entity;
 
+import com.nexoai.ontology.adapters.out.persistence.type.VectorType;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.annotations.Type;
 import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.type.SqlTypes;
 
@@ -39,6 +41,10 @@ public class OntologyObjectEntity {
 
     @Column(name = "data_source_id")
     private UUID dataSourceId;
+
+    @Type(VectorType.class)
+    @Column(name = "embedding", columnDefinition = "vector")
+    private float[] embedding;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

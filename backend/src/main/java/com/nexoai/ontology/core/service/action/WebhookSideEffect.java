@@ -5,9 +5,12 @@ import com.nexoai.ontology.core.domain.action.ActionType;
 import com.nexoai.ontology.core.domain.object.OntologyObject;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.retry.annotation.Backoff;
+import org.springframework.retry.annotation.Retryable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.time.Instant;
 import java.util.Map;
@@ -26,6 +29,11 @@ public class WebhookSideEffect implements SideEffect {
 
     @Override
     @Async
+    @Retryable(
+            retryFor = {WebClientResponseException.class, RuntimeException.class},
+            maxAttempts = 3,
+            backoff = @Backoff(delay = 1000, multiplier = 2.0)
+    )
     public void triggerAsync(ActionType actionType, OntologyObject object, JsonNode newState) {
         JsonNode config = actionType.getSideEffectConfig("WEBHOOK");
         if (config == null || !config.has("url")) {
@@ -47,7 +55,6 @@ public class WebhookSideEffect implements SideEffect {
                 ))
                 .retrieve()
                 .bodyToMono(Void.class)
-                .doOnError(e -> log.error("Webhook failed for action {}: {}", actionType.getApiName(), e.getMessage()))
-                .subscribe();
+                .block();
     }
 }

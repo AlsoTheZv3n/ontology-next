@@ -26,43 +26,52 @@ public class SemanticSearchService {
         // 1. Query embedden
         float[] queryEmbedding = embeddingService.embed(query);
 
-        // 2. ObjectType ID auflösen
+        // 2. ObjectType ID aufloesen
         UUID objectTypeId = objectTypeRepository.findByIsActiveTrue().stream()
                 .filter(ot -> ot.getApiName().equals(objectType))
                 .findFirst()
                 .map(ot -> ot.getId())
                 .orElseThrow(() -> new OntologyException("ObjectType not found: " + objectType));
 
-        // 3. pgvector Nearest-Neighbor Search via native JDBC
+        // 3. pgvector Nearest-Neighbor Search via parameterized JDBC (Fix 09)
         String embeddingStr = arrayToVectorString(queryEmbedding);
 
         String sql = "SELECT o.id, o.properties, o.created_at, " +
-                "1 - (o.embedding <=> '" + embeddingStr + "'::vector) AS similarity " +
+                "1 - (o.embedding <=> CAST(? AS vector)) AS similarity " +
                 "FROM ontology_objects o " +
-                "WHERE o.object_type_id = '" + objectTypeId + "' " +
+                "WHERE o.object_type_id = ? " +
                 "AND o.embedding IS NOT NULL " +
-                "AND 1 - (o.embedding <=> '" + embeddingStr + "'::vector) >= " + minSimilarity + " " +
-                "ORDER BY o.embedding <=> '" + embeddingStr + "'::vector " +
-                "LIMIT " + limit;
+                "AND 1 - (o.embedding <=> CAST(? AS vector)) >= ? " +
+                "ORDER BY o.embedding <=> CAST(? AS vector) " +
+                "LIMIT ?";
 
         List<SemanticSearchResult> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
-             Statement stmt = conn.createStatement();
-             ResultSet rs = stmt.executeQuery(sql)) {
-            while (rs.next()) {
-                JsonNode props;
-                try {
-                    props = objectMapper.readTree(rs.getString("properties"));
-                } catch (Exception e) {
-                    props = objectMapper.createObjectNode();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+
+            stmt.setObject(1, embeddingStr, Types.OTHER);
+            stmt.setObject(2, objectTypeId, Types.OTHER);
+            stmt.setObject(3, embeddingStr, Types.OTHER);
+            stmt.setFloat(4, minSimilarity);
+            stmt.setObject(5, embeddingStr, Types.OTHER);
+            stmt.setInt(6, limit);
+
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    JsonNode props;
+                    try {
+                        props = objectMapper.readTree(rs.getString("properties"));
+                    } catch (Exception e) {
+                        props = objectMapper.createObjectNode();
+                    }
+                    results.add(new SemanticSearchResult(
+                            UUID.fromString(rs.getString("id")),
+                            objectType,
+                            props,
+                            rs.getFloat("similarity"),
+                            rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toInstant() : null
+                    ));
                 }
-                results.add(new SemanticSearchResult(
-                        UUID.fromString(rs.getString("id")),
-                        objectType,
-                        props,
-                        rs.getFloat("similarity"),
-                        rs.getTimestamp("created_at") != null ? rs.getTimestamp("created_at").toInstant() : null
-                ));
             }
         } catch (SQLException e) {
             log.error("Semantic search SQL failed: {}", e.getMessage());

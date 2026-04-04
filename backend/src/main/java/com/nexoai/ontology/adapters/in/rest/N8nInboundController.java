@@ -27,7 +27,9 @@ public class N8nInboundController {
     private String webhookSecret;
 
     /**
-     * n8n creates a single object in the ontology.
+     * n8n creates or upserts a single object in the ontology.
+     * If the payload contains an "externalId" field, it will attempt to find and update
+     * an existing object with that externalId before creating a new one (Fix 10b).
      */
     @PostMapping("/objects/{objectType}")
     public ResponseEntity<Map<String, Object>> createObjectFromN8n(
@@ -37,17 +39,40 @@ public class N8nInboundController {
 
         validateWebhookSecret(secret);
 
-        JsonNode propsNode = objectMapper.valueToTree(properties);
-        OntologyObject created = objectService.createObject(objectType, propsNode);
+        // Fix 10b: Check for externalId in payload for upsert
+        String externalId = properties.get("externalId") != null
+                ? properties.get("externalId").toString() : null;
 
-        log.info("Object created via n8n webhook: {} / {}", objectType, created.getId());
+        OntologyObject result;
+        HttpStatus status;
+
+        if (externalId != null) {
+            // Try to find existing object by externalId and update it
+            var existing = objectService.findByExternalId(externalId);
+            if (existing.isPresent()) {
+                JsonNode propsNode = objectMapper.valueToTree(properties);
+                result = objectService.updateObjectProperties(existing.get().getId(), propsNode);
+                status = HttpStatus.OK;
+                log.info("Object upserted (updated) via n8n webhook: {} / externalId={}", objectType, externalId);
+            } else {
+                JsonNode propsNode = objectMapper.valueToTree(properties);
+                result = objectService.createObject(objectType, propsNode);
+                status = HttpStatus.CREATED;
+                log.info("Object upserted (created) via n8n webhook: {} / externalId={}", objectType, externalId);
+            }
+        } else {
+            JsonNode propsNode = objectMapper.valueToTree(properties);
+            result = objectService.createObject(objectType, propsNode);
+            status = HttpStatus.CREATED;
+            log.info("Object created via n8n webhook: {} / {}", objectType, result.getId());
+        }
 
         Map<String, Object> response = new HashMap<>();
-        response.put("id", created.getId().toString());
-        response.put("objectType", created.getObjectTypeName());
-        response.put("properties", created.getProperties());
-        response.put("createdAt", created.getCreatedAt());
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        response.put("id", result.getId().toString());
+        response.put("objectType", result.getObjectTypeName());
+        response.put("properties", result.getProperties());
+        response.put("createdAt", result.getCreatedAt());
+        return ResponseEntity.status(status).body(response);
     }
 
     /**

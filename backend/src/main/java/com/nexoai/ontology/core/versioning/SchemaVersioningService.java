@@ -132,6 +132,7 @@ public class SchemaVersioningService {
 
     /**
      * Backfill: apply migration transformations to all objects of a type.
+     * Uses batched parallelStream for improved throughput on large datasets (Fix 08).
      */
     @Async
     public CompletableFuture<Map<String, Object>> backfill(UUID objectTypeId, int fromVersion, int toVersion) {
@@ -142,24 +143,31 @@ public class SchemaVersioningService {
                 .filter(o -> o.getObjectTypeId().equals(objectTypeId))
                 .toList();
 
-        int migrated = 0, failed = 0;
+        int batchSize = 100;
+        java.util.concurrent.atomic.AtomicInteger migrated = new java.util.concurrent.atomic.AtomicInteger(0);
+        java.util.concurrent.atomic.AtomicInteger failed = new java.util.concurrent.atomic.AtomicInteger(0);
 
-        for (OntologyObjectEntity obj : objects) {
-            try {
-                JsonNode props = objectMapper.readTree(obj.getProperties());
-                JsonNode migratedProps = applyMigrations(props, migrations);
-                obj.setProperties(migratedProps.toString());
-                obj.setSchemaVersion(toVersion);
-                objectRepository.save(obj);
-                migrated++;
-            } catch (Exception e) {
-                log.warn("Backfill failed for object {}: {}", obj.getId(), e.getMessage());
-                failed++;
-            }
+        for (int i = 0; i < objects.size(); i += batchSize) {
+            int end = Math.min(i + batchSize, objects.size());
+            List<OntologyObjectEntity> batch = objects.subList(i, end);
+
+            batch.parallelStream().forEach(obj -> {
+                try {
+                    JsonNode props = objectMapper.readTree(obj.getProperties());
+                    JsonNode migratedProps = applyMigrations(props, migrations);
+                    obj.setProperties(migratedProps.toString());
+                    obj.setSchemaVersion(toVersion);
+                    objectRepository.save(obj);
+                    migrated.incrementAndGet();
+                } catch (Exception e) {
+                    log.warn("Backfill failed for object {}: {}", obj.getId(), e.getMessage());
+                    failed.incrementAndGet();
+                }
+            });
         }
 
-        log.info("Backfill complete: {} migrated, {} failed", migrated, failed);
-        return CompletableFuture.completedFuture(Map.of("migrated", migrated, "failed", failed));
+        log.info("Backfill complete: {} migrated, {} failed", migrated.get(), failed.get());
+        return CompletableFuture.completedFuture(Map.of("migrated", migrated.get(), "failed", failed.get()));
     }
 
     private JsonNode applyMigrations(JsonNode properties, List<SchemaMigrationEntity> migrations) {

@@ -11,4 +11,5 @@ public interface JpaDataSourceRepository extends JpaRepository<DataSourceDefinit
     Optional<DataSourceDefinitionEntity> findByApiName(String apiName);
     boolean existsByApiName(String apiName);
     List<DataSourceDefinitionEntity> findByIsActiveTrue();
+    Optional<DataSourceDefinitionEntity> findBySourceTable(String sourceTable);
 }

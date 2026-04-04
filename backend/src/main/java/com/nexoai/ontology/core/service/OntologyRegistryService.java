@@ -1,10 +1,15 @@
 package com.nexoai.ontology.core.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.nexoai.ontology.core.domain.*;
 import com.nexoai.ontology.core.domain.ports.in.*;
 import com.nexoai.ontology.core.domain.ports.out.*;
 import com.nexoai.ontology.core.exception.*;
+import com.nexoai.ontology.core.tenant.TenantContext;
+import com.nexoai.ontology.core.versioning.SchemaVersioningService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +20,7 @@ import java.util.UUID;
 @Service
 @RequiredArgsConstructor
 @Transactional
+@Slf4j
 public class OntologyRegistryService implements
         RegisterObjectTypeUseCase,
         UpdateObjectTypeUseCase,
@@ -25,6 +31,8 @@ public class OntologyRegistryService implements
     private final ObjectTypeRepository objectTypeRepository;
     private final PropertyTypeRepository propertyTypeRepository;
     private final LinkTypeRepository linkTypeRepository;
+    private final SchemaVersioningService schemaVersioningService;
+    private final ObjectMapper objectMapper;
 
     // ── ObjectType Registration ──────────────────────────────────────────
 
@@ -59,6 +67,30 @@ public class OntologyRegistryService implements
     @Override
     public ObjectType updateObjectType(UUID id, UpdateObjectTypeCommand command) {
         ObjectType objectType = findObjectTypeOrThrow(id);
+
+        // Fix 07: Create a schema version snapshot before applying changes
+        try {
+            ObjectNode schemaSnapshot = objectMapper.createObjectNode();
+            schemaSnapshot.put("apiName", objectType.getApiName());
+            schemaSnapshot.put("displayName", objectType.getDisplayName());
+            schemaSnapshot.put("description", objectType.getDescription() != null ? objectType.getDescription() : "");
+            schemaSnapshot.set("properties", objectMapper.valueToTree(
+                    objectType.getProperties().stream().map(p -> {
+                        ObjectNode pn = objectMapper.createObjectNode();
+                        pn.put("apiName", p.getApiName());
+                        pn.put("dataType", p.getDataType().name());
+                        pn.put("isRequired", p.isRequired());
+                        return pn;
+                    }).toList()));
+
+            String changeSummary = "Updated: displayName=%s, description=%s".formatted(
+                    command.displayName(), command.description());
+            schemaVersioningService.createVersion(id, schemaSnapshot, changeSummary, false,
+                    TenantContext.getCurrentUser());
+        } catch (Exception e) {
+            log.warn("Could not create schema version for ObjectType {}: {}", id, e.getMessage());
+        }
+
         objectType.setDisplayName(command.displayName());
         objectType.setDescription(command.description());
         objectType.setIcon(command.icon());

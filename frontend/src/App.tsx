@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { ApolloProvider } from '@apollo/client'
 import { apolloClient } from '@/api/graphql/client'
 import { Layout } from '@/components/layout/Layout'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 import { Dashboard } from '@/pages/Dashboard'
 import { OntologyBuilder } from '@/pages/OntologyBuilder'
 import { ObjectExplorer } from '@/pages/ObjectExplorer'
@@ -26,17 +27,19 @@ export default function App() {
     <ApolloProvider client={apolloClient}>
       <BrowserRouter>
         <Layout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/ontology" element={<OntologyBuilder />} />
-            <Route path="/objects/:objectType?" element={<ObjectExplorer />} />
-            <Route path="/graph" element={<GraphView />} />
-            <Route path="/connectors" element={<ConnectorManager />} />
-            <Route path="/actions" element={<ActionCenter />} />
-            <Route path="/chat" element={<AiChat />} />
-            <Route path="/knowledge" element={<Placeholder title="Knowledge Base" />} />
-            <Route path="/settings" element={<Placeholder title="Settings" />} />
-          </Routes>
+          <ErrorBoundary>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/ontology" element={<OntologyBuilder />} />
+              <Route path="/objects/:objectType?" element={<ObjectExplorer />} />
+              <Route path="/graph" element={<GraphView />} />
+              <Route path="/connectors" element={<ConnectorManager />} />
+              <Route path="/actions" element={<ActionCenter />} />
+              <Route path="/chat" element={<AiChat />} />
+              <Route path="/knowledge" element={<Placeholder title="Knowledge Base" />} />
+              <Route path="/settings" element={<Placeholder title="Settings" />} />
+            </Routes>
+          </ErrorBoundary>
         </Layout>
       </BrowserRouter>
     </ApolloProvider>
