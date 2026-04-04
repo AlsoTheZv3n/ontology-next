@@ -1,0 +1,46 @@
+spring:
+  application:
+    name: nexo-ontology-engine
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5434/nexo_ontology}
+    username: ${DB_USERNAME:nexo}
+    password: ${DB_PASSWORD:nexo_secret}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      timeout: 5000ms
+
+  graphql:
+    graphiql:
+      enabled: true
+    schema:
+      locations: classpath:graphql/
+
+server:
+  port: ${SERVER_PORT:8081}
+
+nexo:
+  n8n:
+    webhook-secret: ${N8N_WEBHOOK_SECRET:nexo-n8n-secret}
+    callback-base-url: ${N8N_CALLBACK_URL:http://localhost:8081}
+  jwt:
+    secret: ${JWT_SECRET:nexo-ontology-super-secret-key-that-is-at-least-256-bits-long!}
+    expiration-ms: ${JWT_EXPIRATION:86400000}
+  cdc:
+    enabled: ${CDC_ENABLED:false}

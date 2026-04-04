@@ -1,0 +1,46 @@
+type ActionResult {
+    success: Boolean!
+    objectId: ID
+    message: String
+    auditLogId: ID!
+}
+
+type ActionLogEntry {
+    id: ID!
+    actionType: String!
+    objectId: ID
+    performedBy: String!
+    status: String!
+    beforeState: JSON
+    afterState: JSON
+    performedAt: DateTime!
+}
+
+type ActionTypeSchema {
+    id: ID!
+    apiName: String!
+    displayName: String!
+    targetObjectType: String!
+    requiresApproval: Boolean!
+    validationRules: JSON!
+}
+
+input RegisterActionTypeInput {
+    apiName: String!
+    displayName: String!
+    targetObjectType: String!
+    requiresApproval: Boolean
+    validationRules: [ValidationRuleInput!]
+    sideEffects: [SideEffectInput!]
+}
+
+input ValidationRuleInput {
+    property: String!
+    rule: String!
+    errorMessage: String!
+}
+
+input SideEffectInput {
+    type: String!
+    config: JSON!
+}

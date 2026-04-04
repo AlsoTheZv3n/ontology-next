@@ -1,0 +1,111 @@
+type OntologyObject {
+    id: ID!
+    objectType: String!
+    properties: JSON!
+    linkedObjects(linkType: String!): [OntologyObject!]!
+    createdAt: DateTime!
+    updatedAt: DateTime
+}
+
+type ObjectPage {
+    items: [OntologyObject!]!
+    totalCount: Int!
+    hasNextPage: Boolean!
+    cursor: String
+}
+
+type ObjectTypeSchema {
+    id: ID!
+    apiName: String!
+    displayName: String!
+    description: String
+    properties: [PropertyTypeSchema!]!
+    linkTypes: [LinkTypeSchema!]!
+}
+
+type PropertyTypeSchema {
+    apiName: String!
+    displayName: String!
+    dataType: String!
+    isPrimaryKey: Boolean!
+    isRequired: Boolean!
+}
+
+type LinkTypeSchema {
+    apiName: String!
+    displayName: String!
+    targetObjectType: String!
+    cardinality: String!
+}
+
+input FilterInput {
+    property: String!
+    operator: FilterOperator!
+    value: JSON!
+}
+
+enum FilterOperator {
+    EQUALS
+    NOT_EQUALS
+    GREATER_THAN
+    LESS_THAN
+    CONTAINS
+    IN
+    IS_NULL
+}
+
+input PaginationInput {
+    limit: Int = 20
+    cursor: String
+}
+
+type SemanticSearchResult {
+    object: OntologyObject!
+    similarity: Float!
+}
+
+type GraphData {
+    nodes: [GraphNode!]!
+    edges: [GraphEdge!]!
+}
+
+type GraphNode {
+    id: ID!
+    objectType: String!
+    label: String!
+    properties: JSON!
+    depth: Int!
+}
+
+type GraphEdge {
+    id: ID!
+    sourceId: ID!
+    targetId: ID!
+    linkType: String!
+    label: String!
+}
+
+type SchemaVersion {
+    version: Int!
+    schemaSnapshot: JSON!
+    changeSummary: String!
+    isBreaking: Boolean!
+    createdAt: DateTime!
+    createdBy: String!
+}
+
+type ObjectHistoryEntry {
+    id: ID!
+    schemaVersion: Int!
+    properties: JSON!
+    validFrom: DateTime!
+    validTo: DateTime
+    changeSource: String!
+    changedBy: String!
+}
+
+type ObjectDiff {
+    added: JSON!
+    removed: JSON!
+    changed: JSON!
+}

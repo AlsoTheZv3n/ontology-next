@@ -1,0 +1,76 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #0b1326;
+  --color-surface-dim: #060e20;
+  --color-surface-low: #131b2e;
+  --color-surface-container: #171f33;
+  --color-surface-high: #222a3d;
+  --color-surface-highest: #2d3449;
+  --color-surface-bright: #31394d;
+
+  --color-primary: #bcc7de;
+  --color-primary-dim: #8a9ab8;
+  --color-primary-container: #1e293b;
+
+  --color-accent: #3b82f6;
+  --color-accent-dim: #2563eb;
+
+  --color-tertiary: #ddc39d;
+  --color-secondary: #b9c7e0;
+  --color-secondary-container: #3c4a5e;
+
+  --color-on-surface: #dae2fd;
+  --color-on-surface-variant: #c5c6cd;
+  --color-on-surface-dim: #8892a8;
+  --color-on-primary: #263143;
+
+  --color-outline: #8f9097;
+  --color-outline-variant: #45474c;
+
+  --color-error: #ffb4ab;
+  --color-success: #4ade80;
+  --color-warning: #fbbf24;
+
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Plus Jakarta Sans', 'Inter', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+@layer base {
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--color-surface);
+    color: var(--color-on-surface);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  #root { width: 100%; min-height: 100vh; display: flex; }
+
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #2d3449; border-radius: 10px; }
+
+  .glass-panel {
+    background: rgba(49, 57, 77, 0.7);
+    backdrop-filter: blur(16px);
+  }
+  .glass-card {
+    background: rgba(23, 31, 51, 0.6);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.05);
+  }
+  .thinking-gradient {
+    background: linear-gradient(135deg, #1e293b 0%, #131b2e 50%, #1e293b 100%);
+    background-size: 200% 200%;
+    animation: thinkingPulse 4s ease infinite;
+  }
+  @keyframes thinkingPulse {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+}

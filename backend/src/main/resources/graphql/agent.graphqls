@@ -1,0 +1,39 @@
+type AgentResponse {
+    message: String!
+    sessionId: ID!
+    toolCalls: [ToolCallSummary!]!
+    data: JSON
+    pendingApprovals: [PendingApproval!]!
+    requiresConfirmation: Boolean!
+}
+
+type AgentSession {
+    sessionId: ID!
+    createdAt: DateTime!
+}
+
+type PendingApproval {
+    id: ID!
+    actionType: String!
+    objectId: ID
+    objectSummary: String!
+    params: JSON!
+    humanReadableSummary: String!
+    agentReasoning: String!
+}
+
+type ToolCallSummary {
+    tool: String!
+    input: JSON!
+    resultSummary: String!
+    duration: Int!
+}
+
+type AgentAuditEntry {
+    sessionId: ID!
+    userMessage: String!
+    agentResponse: String
+    toolCalls: JSON!
+    actionsExecuted: JSON!
+    performedAt: DateTime!
+}

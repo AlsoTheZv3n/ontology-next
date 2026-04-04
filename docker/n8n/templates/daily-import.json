@@ -1,0 +1,47 @@
+{
+  "name": "NEXO - Daily Data Import",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "hours", "hoursInterval": 24 }] }
+      },
+      "name": "Daily Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "https://api.example.com/data",
+        "method": "GET",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "name": "Fetch External API",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://nexo-backend:8081/api/v1/inbound/n8n/bulk/Customer",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-N8N-Webhook-Secret", "value": "={{$env.NEXO_WEBHOOK_SECRET}}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{JSON.stringify($json)}}"
+      },
+      "name": "Bulk Import to Ontology",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Daily Trigger": { "main": [[{ "node": "Fetch External API", "type": "main", "index": 0 }]] },
+    "Fetch External API": { "main": [[{ "node": "Bulk Import to Ontology", "type": "main", "index": 0 }]] }
+  }
+}

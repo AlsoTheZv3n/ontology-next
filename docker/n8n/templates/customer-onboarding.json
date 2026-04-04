@@ -1,0 +1,55 @@
+{
+  "name": "NEXO - Customer Onboarding",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "nexo-customer-created",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Ontology Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            { "name": "customerName", "value": "={{$json.data.name}}" },
+            { "name": "email", "value": "={{$json.data.email}}" },
+            { "name": "objectId", "value": "={{$json.objectId}}" },
+            { "name": "callbackUrl", "value": "={{$json.callbackUrl}}" }
+          ]
+        }
+      },
+      "name": "Extract Data",
+      "type": "n8n-nodes-base.set",
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.callbackUrl}}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "X-N8N-Webhook-Secret", "value": "={{$env.NEXO_WEBHOOK_SECRET}}" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "updatedProperties", "value": "{\"onboardingStatus\": \"COMPLETED\"}" }
+          ]
+        }
+      },
+      "name": "Callback to Ontology",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Ontology Webhook": { "main": [[{ "node": "Extract Data", "type": "main", "index": 0 }]] },
+    "Extract Data": { "main": [[{ "node": "Callback to Ontology", "type": "main", "index": 0 }]] }
+  }
+}

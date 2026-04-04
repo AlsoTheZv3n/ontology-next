@@ -1,0 +1,50 @@
+scalar JSON
+scalar DateTime
+
+type Query {
+    # Object Queries
+    searchObjects(objectType: String!, filter: FilterInput, pagination: PaginationInput): ObjectPage!
+    getObject(id: ID!): OntologyObject
+    traverseLinks(objectId: ID!, linkType: String!, depth: Int): [OntologyObject!]!
+
+    # Ontology Schema Queries
+    getObjectType(apiName: String!): ObjectTypeSchema
+    getAllObjectTypes: [ObjectTypeSchema!]!
+    getLinkTypes(sourceObjectType: String): [LinkTypeSchema!]!
+
+    # Action Queries
+    getActionLog(objectId: ID, limit: Int): [ActionLogEntry!]!
+    getActionTypes(objectType: String): [ActionTypeSchema!]!
+
+    # ML Queries
+    semanticSearch(query: String!, objectType: String!, limit: Int = 10, minSimilarity: Float = 0.0): [SemanticSearchResult!]!
+    extractProperties(rawText: String!, targetObjectType: String!): JSON!
+
+    # Graph Queries
+    loadObjectGraph(rootObjectId: ID!, depth: Int = 2, linkTypeFilter: [String!]): GraphData!
+    findPath(fromObjectId: ID!, toObjectId: ID!, maxHops: Int = 5): [GraphNode!]
+
+    # Schema Versioning + Object History
+    getSchemaVersions(objectTypeApiName: String!): [SchemaVersion!]!
+    getObjectHistory(objectId: ID!, limit: Int = 20): [ObjectHistoryEntry!]!
+    getObjectAsOf(objectId: ID!, asOf: DateTime!): OntologyObject
+    diffObject(objectId: ID!, from: DateTime!, to: DateTime!): ObjectDiff!
+
+    # Agent
+    getAgentAuditLog(limit: Int = 50): [AgentAuditEntry!]!
+}
+
+type Mutation {
+    # Actions (einziger Write-Path)
+    executeAction(actionType: String!, objectId: ID, params: JSON!): ActionResult!
+    createObject(objectType: String!, properties: JSON!): OntologyObject!
+    deleteObject(objectType: String!, objectId: ID!): Boolean!
+
+    # Ontology Management
+    registerActionType(input: RegisterActionTypeInput!): ActionTypeSchema!
+
+    # Agent Chat
+    agentChat(sessionId: ID, message: String!): AgentResponse!
+    confirmAgentAction(sessionId: ID!, approvalId: ID!, approved: Boolean!): AgentResponse!
+    startAgentSession: AgentSession!
+}
