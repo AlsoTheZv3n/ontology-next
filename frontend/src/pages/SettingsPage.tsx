@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { Settings, User, Shield, Bell, Database, Key, Globe, Moon } from 'lucide-react'
 
 function SettingSection({ icon: Icon, title, description, children }: {
@@ -116,9 +117,9 @@ export function SettingsPage() {
             <button className="w-full text-left px-4 py-3 bg-surface-high rounded-lg text-sm text-on-surface hover:bg-surface-bright transition-colors">
               Change Password
             </button>
-            <button className="w-full text-left px-4 py-3 bg-surface-high rounded-lg text-sm text-on-surface hover:bg-surface-bright transition-colors">
+            <Link to="/settings/api-keys" className="block w-full text-left px-4 py-3 bg-surface-high rounded-lg text-sm text-on-surface hover:bg-surface-bright transition-colors">
               Manage API Keys
-            </button>
+            </Link>
             <button className="w-full text-left px-4 py-3 bg-surface-high rounded-lg text-sm text-on-surface hover:bg-surface-bright transition-colors">
               Active Sessions
             </button>

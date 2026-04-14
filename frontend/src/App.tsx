@@ -12,6 +12,7 @@ import { ActionCenter } from '@/pages/ActionCenter'
 import { AiChat } from '@/pages/AiChat'
 import { KnowledgeBase } from '@/pages/KnowledgeBase'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { ApiKeys } from '@/pages/ApiKeys'
 import { SupportPage } from '@/pages/SupportPage'
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
               <Route path="/chat" element={<AiChat />} />
               <Route path="/knowledge" element={<KnowledgeBase />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/settings/api-keys" element={<ApiKeys />} />
               <Route path="/support" element={<SupportPage />} />
             </Routes>
           </ErrorBoundary>
