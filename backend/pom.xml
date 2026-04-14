@@ -87,6 +87,12 @@
             <version>${djl.version}</version>
             <scope>runtime</scope>
         </dependency>
+        <dependency>
+            <groupId>ai.djl.onnxruntime</groupId>
+            <artifactId>onnxruntime-engine</artifactId>
+            <version>${djl.version}</version>
+            <scope>runtime</scope>
+        </dependency>
 
         <!-- JWT (JJWT) -->
         <dependency>

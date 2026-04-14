@@ -55,6 +55,9 @@ nexo:
     enabled: ${CDC_ENABLED:false}
   security:
     auth-enforced: ${AUTH_ENFORCED:false}
+  ml:
+    model-path: ${NEXO_ML_MODEL_PATH:}
+    fail-fast: ${NEXO_ML_FAIL_FAST:false}
   llm:
     provider: ${NEXO_LLM_PROVIDER:none}
     max-tokens: ${NEXO_LLM_MAX_TOKENS:4096}

@@ -195,22 +195,77 @@ public class AgentSessionService {
     }
 
     /**
-     * Try to use the LLM provider if available, otherwise fall back to keyword routing.
+     * Agent loop with tool-calling.
+     * LLM -> if tool_use -> execute tool -> feed result back -> repeat until END_TURN.
+     * Falls back to keyword routing if no LLM is configured.
      */
+    private static final int MAX_AGENT_ITERATIONS = 5;
+
     private String processMessageWithLlm(String userMessage, List<Map<String, Object>> toolCalls,
                                           List<LlmMessage> conversationHistory) {
-        if (llmProvider != null && llmProvider.isAvailable()) {
-            List<LlmMessage> messages = new ArrayList<>(conversationHistory);
-            messages.add(LlmMessage.user(userMessage));
+        if (llmProvider == null || !llmProvider.isAvailable()) {
+            // No LLM configured → keyword routing fallback
+            return processMessage(userMessage, toolCalls);
+        }
 
-            LlmResponse response = llmProvider.chat(SYSTEM_PROMPT, messages);
-            if (response != null && response.content() != null && !response.content().isBlank()) {
-                return response.content();
+        List<LlmMessage> messages = new ArrayList<>(conversationHistory);
+        messages.add(LlmMessage.user(userMessage));
+        List<LlmToolDefinition> tools = agentTools.toolDefinitions();
+
+        int totalInputTokens = 0;
+        int totalOutputTokens = 0;
+
+        for (int i = 0; i < MAX_AGENT_ITERATIONS; i++) {
+            LlmResponse response = llmProvider.chatWithTools(SYSTEM_PROMPT, messages, tools);
+            totalInputTokens += response.inputTokens();
+            totalOutputTokens += response.outputTokens();
+
+            // End of turn: LLM has final text answer
+            if (!response.hasToolCalls()) {
+                log.info("Agent finished after {} iterations (tokens: in={}, out={})",
+                        i + 1, totalInputTokens, totalOutputTokens);
+                return response.content() != null ? response.content() : "";
+            }
+
+            // LLM wants to call tools — execute them and feed results back
+            // First, add the assistant's "thinking" message (with tool_use blocks)
+            messages.add(LlmMessage.assistant(response.content() != null ? response.content() : ""));
+
+            for (LlmResponse.LlmToolCall call : response.toolCalls()) {
+                long t0 = System.currentTimeMillis();
+                String resultJson;
+                try {
+                    Object result = agentTools.executeTool(call.name(), call.arguments());
+                    resultJson = objectMapper.writeValueAsString(result);
+                    toolCalls.add(Map.of(
+                            "tool", call.name(),
+                            "input", call.arguments(),
+                            "resultSummary", summarize(result),
+                            "duration", System.currentTimeMillis() - t0
+                    ));
+                } catch (Exception e) {
+                    log.error("Tool {} execution failed: {}", call.name(), e.getMessage());
+                    resultJson = "{\"error\":\"" + e.getMessage().replace("\"", "'") + "\"}";
+                    toolCalls.add(Map.of(
+                            "tool", call.name(),
+                            "input", call.arguments(),
+                            "resultSummary", "ERROR: " + e.getMessage(),
+                            "duration", System.currentTimeMillis() - t0
+                    ));
+                }
+                // Feed tool result back to LLM
+                messages.add(LlmMessage.toolResult(call.id(), call.name(), resultJson));
             }
         }
 
-        // Fall back to keyword routing
-        return processMessage(userMessage, toolCalls);
+        log.warn("Agent loop hit MAX_AGENT_ITERATIONS={} without END_TURN", MAX_AGENT_ITERATIONS);
+        return "Agent reached iteration limit without final answer. Please rephrase your question.";
+    }
+
+    private String summarize(Object result) {
+        if (result == null) return "null";
+        String s = String.valueOf(result);
+        return s.length() > 200 ? s.substring(0, 200) + "..." : s;
     }
 
     /**
