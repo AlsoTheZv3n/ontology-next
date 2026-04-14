@@ -43,14 +43,26 @@ public class SecurityConfig implements WebMvcConfigurer {
 
         if (authEnforced) {
             http.authorizeHttpRequests(auth -> auth
+                // Public — no auth required
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/v1/inbound/n8n/**").permitAll()
-                .requestMatchers("/graphiql/**").permitAll()
-                .requestMatchers("/ws/**").permitAll()
-                .requestMatchers("/actuator/**").permitAll()
+                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                // Admin — only OWNER role (tenant creation, global admin ops)
+                .requestMatchers("/api/admin/**").hasRole("OWNER")
+                // DELETE writes require OWNER or ADMIN
+                .requestMatchers(org.springframework.http.HttpMethod.DELETE, "/api/**")
+                        .hasAnyRole("OWNER", "ADMIN")
+                // POST/PUT writes require OWNER, ADMIN or MEMBER
+                .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/**")
+                        .hasAnyRole("OWNER", "ADMIN", "MEMBER")
+                .requestMatchers(org.springframework.http.HttpMethod.PUT, "/api/**")
+                        .hasAnyRole("OWNER", "ADMIN", "MEMBER")
+                // Reads + GraphQL + WebSocket require authentication
                 .requestMatchers("/graphql").authenticated()
+                .requestMatchers("/graphiql/**").authenticated()
+                .requestMatchers("/ws/**").authenticated()
                 .requestMatchers("/api/v1/**").authenticated()
-                .requestMatchers("/api/admin/**").hasRole("SUPER_ADMIN")
+                .requestMatchers("/actuator/**").hasRole("OWNER")
                 .anyRequest().authenticated()
             );
         } else {
