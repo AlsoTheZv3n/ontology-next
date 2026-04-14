@@ -1,8 +1,8 @@
 package com.nexoai.ontology.config;
 
+import com.nexoai.ontology.core.ratelimit.RedisRateLimiter;
 import com.nexoai.ontology.core.tenant.TenantContext;
-import io.github.bucket4j.Bandwidth;
-import io.github.bucket4j.Bucket;
+import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -15,17 +15,22 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Component
 @Slf4j
 public class RateLimitFilter extends OncePerRequestFilter {
 
-    private final ConcurrentHashMap<UUID, Bucket> buckets = new ConcurrentHashMap<>();
-    private final JdbcTemplate jdbcTemplate;
+    private static final Duration WINDOW = Duration.ofMinutes(1);
 
-    public RateLimitFilter(JdbcTemplate jdbcTemplate) {
+    private final RedisRateLimiter limiter;
+    private final JdbcTemplate jdbcTemplate;
+    private final MeterRegistry meterRegistry;
+
+    public RateLimitFilter(RedisRateLimiter limiter, JdbcTemplate jdbcTemplate,
+                            MeterRegistry meterRegistry) {
+        this.limiter = limiter;
         this.jdbcTemplate = jdbcTemplate;
+        this.meterRegistry = meterRegistry;
     }
 
     @Override
@@ -44,39 +49,44 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
-        Bucket bucket = buckets.computeIfAbsent(tenantId, this::createBucket);
+        String plan = resolvePlan(tenantId);
+        int limit = planLimit(plan);
+        String key = "ratelimit:" + tenantId;
 
-        if (bucket.tryConsume(1)) {
-            filterChain.doFilter(request, response);
-        } else {
+        RedisRateLimiter.Outcome outcome = limiter.tryConsume(key, limit, WINDOW);
+
+        meterRegistry.counter("nexo.rate.limit.hits",
+                "plan", plan, "outcome", outcome.name().toLowerCase()).increment();
+
+        if (outcome == RedisRateLimiter.Outcome.BLOCK) {
             response.setStatus(429);
             response.setHeader("Retry-After", "60");
+            response.setHeader("X-RateLimit-Limit", String.valueOf(limit));
             response.setContentType("application/json");
             response.getWriter().write(
                     "{\"error\":\"Rate limit exceeded\",\"status\":429,\"retryAfter\":60}");
+            return;
         }
+        filterChain.doFilter(request, response);
     }
 
-    private Bucket createBucket(UUID tenantId) {
-        int tokensPerMinute = resolveRateLimit(tenantId);
-        return Bucket.builder()
-                .addLimit(Bandwidth.simple(tokensPerMinute, Duration.ofMinutes(1)))
-                .build();
-    }
-
-    private int resolveRateLimit(UUID tenantId) {
+    private String resolvePlan(UUID tenantId) {
         try {
-            String plan = jdbcTemplate.queryForObject(
-                    "SELECT plan FROM tenants WHERE id = ?::uuid", String.class, tenantId.toString());
-            return switch (plan) {
-                case "STARTER" -> 300;
-                case "PRO" -> 1000;
-                case "ENTERPRISE" -> 5000;
-                default -> 60; // FREE
-            };
+            return jdbcTemplate.queryForObject(
+                    "SELECT plan FROM tenants WHERE id = ?::uuid",
+                    String.class, tenantId.toString());
         } catch (Exception e) {
-            log.debug("Could not resolve plan for tenant {}, using default rate limit", tenantId);
-            return 60;
+            return "FREE";
         }
+    }
+
+    private static int planLimit(String plan) {
+        if (plan == null) return 60;
+        return switch (plan) {
+            case "STARTER"    -> 300;
+            case "PRO"        -> 1000;
+            case "ENTERPRISE" -> 5000;
+            default           -> 60;
+        };
     }
 }
