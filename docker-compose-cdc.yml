@@ -1,0 +1,77 @@
+version: '3.9'
+
+# Optional CDC stack (Debezium + Kafka + source Postgres).
+# Usage: docker compose -f docker-compose.yml -f docker-compose-cdc.yml up -d
+# Register the connector after containers are healthy:
+#   ./docker/cdc/register-connector.sh
+
+services:
+  source-postgres:
+    image: postgres:16
+    container_name: nexo-source-postgres
+    environment:
+      POSTGRES_DB: source
+      POSTGRES_USER: source_user
+      POSTGRES_PASSWORD: ${SOURCE_DB_PASSWORD:-source_pw}
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./docker/cdc/init-source.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - source-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U source_user -d source"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: nexo-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: nexo-kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+
+  connect:
+    image: debezium/connect:2.6
+    container_name: nexo-connect
+    depends_on:
+      - kafka
+      - source-postgres
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: nexo-connect
+      CONFIG_STORAGE_TOPIC: connect_configs
+      OFFSET_STORAGE_TOPIC: connect_offsets
+      STATUS_STORAGE_TOPIC: connect_statuses
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+    ports:
+      - "8083:8083"
+
+volumes:
+  source-pg-data:
