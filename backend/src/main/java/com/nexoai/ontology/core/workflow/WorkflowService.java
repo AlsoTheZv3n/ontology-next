@@ -1,22 +1,31 @@
 package com.nexoai.ontology.core.workflow;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nexoai.ontology.core.exception.OntologyException;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class WorkflowService {
 
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper;
+    private final Map<String, WorkflowStepExecutor> executors;
+
+    public WorkflowService(JdbcTemplate jdbcTemplate, ObjectMapper objectMapper,
+                            List<WorkflowStepExecutor> executorList) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.objectMapper = objectMapper;
+        this.executors = executorList.stream()
+                .collect(Collectors.toMap(WorkflowStepExecutor::stepType, e -> e, (a, b) -> a));
+    }
 
     public Map<String, Object> createWorkflow(UUID tenantId, String name, String description,
                                                String triggerType, String triggerConfig, String steps) {
@@ -52,7 +61,6 @@ public class WorkflowService {
         }
     }
 
-    @SuppressWarnings("unchecked")
     public Map<String, Object> triggerWorkflow(UUID workflowId, String triggerData) {
         Map<String, Object> workflow = getWorkflow(workflowId);
 
@@ -62,47 +70,70 @@ public class WorkflowService {
 
         UUID runId = UUID.randomUUID();
         UUID tenantId = UUID.fromString(workflow.get("tenant_id").toString());
+        String triggerJson = triggerData != null ? triggerData : "{}";
 
         jdbcTemplate.update(
                 """
                 INSERT INTO workflow_runs (id, workflow_id, tenant_id, status, trigger_data)
                 VALUES (?::uuid, ?::uuid, ?::uuid, 'RUNNING', ?::jsonb)
                 """,
-                runId.toString(), workflowId.toString(), tenantId.toString(),
-                triggerData != null ? triggerData : "{}");
+                runId.toString(), workflowId.toString(), tenantId.toString(), triggerJson);
+
+        List<Map<String, Object>> stepResults = new ArrayList<>();
+        String finalStatus = "COMPLETED";
 
         try {
-            String stepsStr = workflow.get("steps").toString();
-            List<Map<String, Object>> steps = objectMapper.readValue(stepsStr, List.class);
-            List<Map<String, Object>> stepResults = new ArrayList<>();
+            WorkflowContext ctx = new WorkflowContext(objectMapper);
+            ctx.put("triggerData", objectMapper.readTree(triggerJson));
+
+            List<JsonNode> steps = parseSteps(workflow.get("steps"));
 
             for (int i = 0; i < steps.size(); i++) {
-                Map<String, Object> step = steps.get(i);
-                String stepName = step.getOrDefault("name", "step-" + (i + 1)).toString();
-                String stepType = step.getOrDefault("type", "LOG").toString();
+                JsonNode step = steps.get(i);
+                String type = step.path("type").asText("LOG");
+                String name = step.path("name").asText("step-" + (i + 1));
 
-                Map<String, Object> result = new HashMap<>();
-                result.put("step", stepName);
-                result.put("type", stepType);
-                result.put("index", i);
-                result.put("status", "COMPLETED");
-                result.put("executedAt", OffsetDateTime.now().toString());
+                if (ctx.isSkipRest()) {
+                    stepResults.add(stepEntry(i, name, type, "SKIPPED", null,
+                            0L, "previous condition false"));
+                    continue;
+                }
 
-                log.info("Workflow run {}: executing step {} ({})", runId, stepName, stepType);
-                stepResults.add(result);
+                WorkflowStepExecutor exec = executors.get(type);
+                long t0 = System.currentTimeMillis();
+                if (exec == null) {
+                    stepResults.add(stepEntry(i, name, type, "FAILED", null,
+                            System.currentTimeMillis() - t0, "unknown step type: " + type));
+                    finalStatus = "FAILED";
+                    break;
+                }
+
+                try {
+                    WorkflowStepExecutor.StepResult r = exec.execute(step, ctx);
+                    long duration = System.currentTimeMillis() - t0;
+                    stepResults.add(stepEntry(i, name, type, r.status(), r.output(), duration, r.error()));
+                    if (r.output() != null) ctx.put("step_" + i, r.output());
+                    if ("FAILED".equals(r.status())) {
+                        finalStatus = "FAILED";
+                        break;
+                    }
+                } catch (Exception e) {
+                    long duration = System.currentTimeMillis() - t0;
+                    stepResults.add(stepEntry(i, name, type, "FAILED", null, duration, e.getMessage()));
+                    finalStatus = "FAILED";
+                    break;
+                }
             }
-
-            String stepResultsJson = objectMapper.writeValueAsString(stepResults);
 
             jdbcTemplate.update(
                     """
                     UPDATE workflow_runs
-                    SET status = 'COMPLETED', step_results = ?::jsonb, finished_at = NOW()
+                    SET status = ?, step_results = ?::jsonb, finished_at = NOW()
                     WHERE id = ?::uuid
                     """,
-                    stepResultsJson, runId.toString());
+                    finalStatus, objectMapper.writeValueAsString(stepResults), runId.toString());
 
-            log.info("Workflow run {} completed with {} steps", runId, steps.size());
+            log.info("Workflow run {} {} with {} steps", runId, finalStatus, stepResults.size());
 
         } catch (OntologyException e) {
             throw e;
@@ -130,5 +161,29 @@ public class WorkflowService {
                 LIMIT 100
                 """,
                 workflowId.toString());
+    }
+
+    private List<JsonNode> parseSteps(Object stepsJson) throws Exception {
+        if (stepsJson == null) return List.of();
+        JsonNode node = objectMapper.readTree(stepsJson.toString());
+        if (!node.isArray()) return List.of();
+        List<JsonNode> out = new ArrayList<>();
+        node.forEach(out::add);
+        return out;
+    }
+
+    private static Map<String, Object> stepEntry(int index, String name, String type,
+                                                  String status, JsonNode output,
+                                                  long durationMs, String error) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("index", index);
+        entry.put("step", name);
+        entry.put("type", type);
+        entry.put("status", status);
+        entry.put("durationMs", durationMs);
+        if (output != null) entry.put("output", output);
+        if (error != null) entry.put("error", error);
+        entry.put("executedAt", OffsetDateTime.now().toString());
+        return entry;
     }
 }
