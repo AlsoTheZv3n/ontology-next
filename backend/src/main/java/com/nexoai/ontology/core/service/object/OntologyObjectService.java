@@ -12,6 +12,7 @@ import com.nexoai.ontology.adapters.out.persistence.repository.JpaLinkTypeReposi
 import com.nexoai.ontology.core.domain.object.OntologyObject;
 import com.nexoai.ontology.core.entityresolution.ResolutionRunner;
 import com.nexoai.ontology.core.exception.OntologyException;
+import com.nexoai.ontology.core.lineage.LineageService;
 import com.nexoai.ontology.core.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -32,6 +33,7 @@ public class OntologyObjectService {
     private final JpaLinkTypeRepository linkTypeRepository;
     private final ObjectMapper objectMapper;
     private final ResolutionRunner resolutionRunner;
+    private final LineageService lineageService;
 
     public OntologyObject createObject(String objectTypeName, JsonNode properties) {
         var objectType = objectTypeRepository.findByIsActiveTrue().stream()
@@ -79,10 +81,21 @@ public class OntologyObjectService {
     }
 
     public OntologyObject updateObjectProperties(UUID objectId, JsonNode newProperties) {
+        return updateObjectProperties(objectId, newProperties,
+                LineageService.SourceType.USER, null, "api");
+    }
+
+    /**
+     * Patch-merge object properties and record per-field lineage. Sources other than USER
+     * (CONNECTOR, CDC, ACTION, AGENT) call this overload so the lineage entry carries the
+     * right provenance.
+     */
+    public OntologyObject updateObjectProperties(UUID objectId, JsonNode newProperties,
+                                                  LineageService.SourceType sourceType,
+                                                  String sourceId, String sourceName) {
         var entity = objectRepository.findById(objectId)
                 .orElseThrow(() -> new OntologyException("Object not found: " + objectId));
 
-        // Merge: existing properties + new properties
         JsonNode existing = parseJson(entity.getProperties());
         ObjectNode merged = existing.deepCopy().isObject()
                 ? (ObjectNode) existing.deepCopy()
@@ -93,8 +106,22 @@ public class OntologyObjectService {
         var saved = objectRepository.save(entity);
         String typeName = resolveObjectTypeName(saved.getObjectTypeId());
         OntologyObject domain = toDomain(saved, typeName);
+
+        recordLineageSafely(objectId, existing, newProperties, sourceType, sourceId, sourceName);
         triggerResolutionCheck(domain);
         return domain;
+    }
+
+    private void recordLineageSafely(UUID objectId, JsonNode oldProps, JsonNode patch,
+                                      LineageService.SourceType sourceType,
+                                      String sourceId, String sourceName) {
+        try {
+            lineageService.recordDiff(objectId, oldProps, patch, sourceType, sourceId, sourceName,
+                    TenantContext.getCurrentUser());
+        } catch (Exception e) {
+            // Lineage is observability, not a correctness-critical path.
+            // An upsert must never fail because the lineage table is unavailable.
+        }
     }
 
     /**
