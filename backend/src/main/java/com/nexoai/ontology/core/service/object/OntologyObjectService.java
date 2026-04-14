@@ -10,7 +10,9 @@ import com.nexoai.ontology.adapters.out.persistence.repository.JpaOntologyObject
 import com.nexoai.ontology.adapters.out.persistence.repository.JpaObjectTypeRepository;
 import com.nexoai.ontology.adapters.out.persistence.repository.JpaLinkTypeRepository;
 import com.nexoai.ontology.core.domain.object.OntologyObject;
+import com.nexoai.ontology.core.entityresolution.ResolutionRunner;
 import com.nexoai.ontology.core.exception.OntologyException;
+import com.nexoai.ontology.core.tenant.TenantContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -29,6 +31,7 @@ public class OntologyObjectService {
     private final JpaObjectLinkRepository linkRepository;
     private final JpaLinkTypeRepository linkTypeRepository;
     private final ObjectMapper objectMapper;
+    private final ResolutionRunner resolutionRunner;
 
     public OntologyObject createObject(String objectTypeName, JsonNode properties) {
         var objectType = objectTypeRepository.findByIsActiveTrue().stream()
@@ -44,7 +47,9 @@ public class OntologyObjectService {
                 .updatedAt(now)
                 .build();
         var saved = objectRepository.save(entity);
-        return toDomain(saved, objectTypeName);
+        OntologyObject domain = toDomain(saved, objectTypeName);
+        triggerResolutionCheck(domain);
+        return domain;
     }
 
     @Transactional(readOnly = true)
@@ -87,7 +92,25 @@ public class OntologyObjectService {
         entity.setProperties(merged.toString());
         var saved = objectRepository.save(entity);
         String typeName = resolveObjectTypeName(saved.getObjectTypeId());
-        return toDomain(saved, typeName);
+        OntologyObject domain = toDomain(saved, typeName);
+        triggerResolutionCheck(domain);
+        return domain;
+    }
+
+    /**
+     * Fire-and-forget duplicate detection. Captures TenantContext on the calling thread and
+     * passes the tenantId explicitly because @Async runs on a pool that doesn't inherit
+     * ThreadLocals. Any failure is swallowed — resolution is best-effort and must never
+     * fail an upsert.
+     */
+    private void triggerResolutionCheck(OntologyObject subject) {
+        try {
+            UUID tenantId = TenantContext.getTenantIdOrNull();
+            if (tenantId == null) return;
+            resolutionRunner.scheduleCheck(subject, tenantId);
+        } catch (Exception ignored) {
+            // never fail the upsert because of a side-channel
+        }
     }
 
     @Transactional(readOnly = true)
