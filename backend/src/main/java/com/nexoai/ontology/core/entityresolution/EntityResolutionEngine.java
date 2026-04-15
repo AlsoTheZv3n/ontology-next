@@ -54,19 +54,35 @@ public class EntityResolutionEngine {
      * @return candidates with confidence >= MIN_REPORT_CONFIDENCE, sorted desc
      */
     public List<Candidate> findDuplicates(OntologyObject subject, int maxCandidates) {
+        // Default path: candidate pool = every object of the same type. Convenient
+        // for upsert-time 1:N detection but O(N) per call. The bulk scan in
+        // DuplicateDetectionService should pre-filter and call the overload below.
+        if (subject == null || subject.getObjectTypeId() == null) return List.of();
+        List<OntologyObjectEntity> peers = objectRepository.findAll().stream()
+                .filter(e -> e.getObjectTypeId().equals(subject.getObjectTypeId()))
+                .filter(e -> !e.getId().equals(subject.getId()))
+                .toList();
+        return findDuplicatesIn(subject, peers, maxCandidates);
+    }
+
+    /**
+     * Score the subject against an explicit candidate pool. Used by the bulk
+     * dedup scan after blocking has narrowed the comparison set so we don't
+     * pay the O(N²) cost of comparing every object against every other.
+     */
+    public List<Candidate> findDuplicatesIn(OntologyObject subject,
+                                              List<OntologyObjectEntity> candidatePool,
+                                              int maxCandidates) {
         if (subject == null || subject.getObjectTypeId() == null) return List.of();
 
         JsonNode subjProps = subject.getProperties();
         if (subjProps == null || subjProps.isNull() || subjProps.isEmpty()) return List.of();
 
-        // Narrow candidate set: same object_type, not the subject itself
-        List<OntologyObjectEntity> peers = objectRepository.findAll().stream()
-                .filter(e -> e.getObjectTypeId().equals(subject.getObjectTypeId()))
-                .filter(e -> !e.getId().equals(subject.getId()))
-                .toList();
-
         List<Candidate> candidates = new ArrayList<>();
-        for (OntologyObjectEntity peer : peers) {
+        for (OntologyObjectEntity peer : candidatePool) {
+            if (peer.getId().equals(subject.getId())) continue;
+            if (!subject.getObjectTypeId().equals(peer.getObjectTypeId())) continue;
+
             JsonNode peerProps = parseProps(peer.getProperties());
             if (peerProps == null) continue;
 

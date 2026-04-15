@@ -112,6 +112,12 @@
             <version>0.12.6</version>
             <scope>runtime</scope>
         </dependency>
+        <!-- Soundex / Phonetic encoding for dedup blocking (gap-11) -->
+        <dependency>
+            <groupId>commons-codec</groupId>
+            <artifactId>commons-codec</artifactId>
+            <version>1.16.1</version>
+        </dependency>
 
         <!-- Spring Security -->
         <dependency>

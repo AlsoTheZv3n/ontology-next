@@ -16,8 +16,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.apache.commons.codec.language.Soundex;
+
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -40,6 +45,7 @@ import java.util.UUID;
 public class DuplicateDetectionService {
 
     private static final int MAX_CANDIDATES_PER_OBJECT = 5;
+    private static final Soundex SOUNDEX = new Soundex();
 
     private final EntityResolutionEngine engine;
     private final ResolutionService resolutionService;
@@ -62,28 +68,92 @@ public class DuplicateDetectionService {
                 .filter(e -> objectTypeId.equals(e.getObjectTypeId()))
                 .toList();
 
-        int pairsFound = 0;
-        for (OntologyObjectEntity entity : peers) {
-            OntologyObject domain = toDomain(entity, objectTypeId);
-            if (domain == null) continue;
+        // Blocking: bucket peers by a coarse fingerprint (email-prefix or
+        // Soundex of name). Objects in different blocks can't be duplicates,
+        // so we skip those comparisons entirely. This drops the dominant
+        // O(N²) cost to roughly O(Σ bᵢ²) — for evenly-distributed Customer
+        // tables that's typically O(N²/k) where k = number of distinct keys.
+        Map<String, List<OntologyObjectEntity>> blocks = bucketize(peers);
 
-            List<Candidate> candidates = engine.findDuplicates(domain, MAX_CANDIDATES_PER_OBJECT);
-            for (Candidate c : candidates) {
-                // Canonicalize ordering so the unique-pair constraint prevents double-insert.
-                UUID lo = entity.getId().compareTo(c.objectId()) < 0 ? entity.getId() : c.objectId();
-                UUID hi = entity.getId().compareTo(c.objectId()) < 0 ? c.objectId() : entity.getId();
-                resolutionService.createPending(tenantId, objectTypeId, lo, hi,
-                        c.matchType(), c.confidence(), c.features());
-                pairsFound++;
+        int pairsFound = 0;
+        int comparisons = 0;
+        for (List<OntologyObjectEntity> block : blocks.values()) {
+            if (block.size() < 2) continue;  // singletons can't have duplicates
+            for (OntologyObjectEntity entity : block) {
+                OntologyObject domain = toDomain(entity, objectTypeId);
+                if (domain == null) continue;
+                comparisons += block.size() - 1;
+
+                List<Candidate> candidates = engine.findDuplicatesIn(
+                        domain, block, MAX_CANDIDATES_PER_OBJECT);
+                for (Candidate c : candidates) {
+                    UUID lo = entity.getId().compareTo(c.objectId()) < 0
+                            ? entity.getId() : c.objectId();
+                    UUID hi = entity.getId().compareTo(c.objectId()) < 0
+                            ? c.objectId() : entity.getId();
+                    resolutionService.createPending(tenantId, objectTypeId, lo, hi,
+                            c.matchType(), c.confidence(), c.features());
+                    pairsFound++;
+                }
             }
         }
         sample.stop(meterRegistry.timer("nexo.dedup.scan.duration",
                 "objectType", objectTypeId.toString()));
         meterRegistry.counter("nexo.dedup.candidates.total",
                 "tenant", tenantId.toString()).increment(pairsFound);
-        log.info("Dedup scan: type={} scanned={} pairsFound={}",
-                objectTypeId, peers.size(), pairsFound);
+        log.info("Dedup scan: type={} scanned={} blocks={} comparisons={} pairsFound={}",
+                objectTypeId, peers.size(), blocks.size(), comparisons, pairsFound);
         return new ScanReport(objectTypeId, peers.size(), pairsFound);
+    }
+
+    /**
+     * Group entities by a coarse block key. Objects with different keys cannot
+     * possibly be duplicates and are not compared.
+     *
+     * Block key (in order of preference):
+     *   1. first 3 chars of email local-part (before @)
+     *   2. Soundex of name / displayName / company_name
+     *   3. "_none" — entities without either land in one big block, paying
+     *      the full O(B²) cost. Acceptable as long as it's a small slice.
+     */
+    Map<String, List<OntologyObjectEntity>> bucketize(List<OntologyObjectEntity> peers) {
+        Map<String, List<OntologyObjectEntity>> blocks = new HashMap<>();
+        for (OntologyObjectEntity e : peers) {
+            String key = blockKey(e);
+            blocks.computeIfAbsent(key, k -> new ArrayList<>()).add(e);
+        }
+        return blocks;
+    }
+
+    private String blockKey(OntologyObjectEntity entity) {
+        try {
+            JsonNode props = mapper.readTree(
+                    entity.getProperties() == null ? "{}" : entity.getProperties());
+            String email = props.path("email").asText("");
+            if (!email.isBlank() && email.contains("@")) {
+                String local = email.substring(0, email.indexOf('@'))
+                        .toLowerCase(Locale.ROOT);
+                return "email:" + local.substring(0, Math.min(3, local.length()));
+            }
+            for (String nameField : new String[]{"name", "displayName", "company_name"}) {
+                String name = props.path(nameField).asText("");
+                if (!name.isBlank()) {
+                    return "name:" + soundexSafe(name);
+                }
+            }
+            return "_none";
+        } catch (Exception e) {
+            return "_none";
+        }
+    }
+
+    private static String soundexSafe(String input) {
+        try {
+            return SOUNDEX.encode(input);
+        } catch (IllegalArgumentException e) {
+            // Soundex throws on non-ASCII first chars; fall back to a coarse hash.
+            return "x" + Math.abs(input.hashCode() % 1000);
+        }
     }
 
     /**

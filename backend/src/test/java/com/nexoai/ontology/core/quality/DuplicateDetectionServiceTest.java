@@ -67,7 +67,7 @@ class DuplicateDetectionServiceTest {
                 entity(a, "{\"email\":\"x@y.ch\"}"),
                 entity(b, "{\"email\":\"x@y.ch\"}")
         ));
-        when(engine.findDuplicates(any(), anyInt()))
+        when(engine.findDuplicatesIn(any(), anyList(), anyInt()))
                 .thenReturn(List.of(new EntityResolutionEngine.Candidate(b, "EXACT", 0.99,
                         Map.of("exact_field", "email"))))
                 .thenReturn(List.of(new EntityResolutionEngine.Candidate(a, "EXACT", 0.99,
