@@ -113,6 +113,33 @@ public class WorkflowService {
                     long duration = System.currentTimeMillis() - t0;
                     stepResults.add(stepEntry(i, name, type, r.status(), r.output(), duration, r.error()));
                     if (r.output() != null) ctx.put("step_" + i, r.output());
+
+                    // PAUSE — long WAIT step deferred to the resume scheduler.
+                    // Persist run as PAUSED with resume_at + current_step pointer
+                    // so WorkflowResumeScheduler can pick it up later.
+                    if ("PAUSE".equals(r.status())) {
+                        long resumeMs = r.output() == null ? 0
+                                : r.output().path("pauseUntilMs").asLong(0);
+                        try {
+                            jdbcTemplate.update("""
+                                UPDATE workflow_runs
+                                   SET status = 'PAUSED',
+                                       step_results = ?::jsonb,
+                                       current_step = ?,
+                                       resume_at = to_timestamp(?)
+                                 WHERE id = ?::uuid
+                                """,
+                                objectMapper.writeValueAsString(stepResults),
+                                i + 1,
+                                resumeMs / 1000.0,
+                                runId.toString());
+                        } catch (Exception persistEx) {
+                            log.warn("Could not persist PAUSED run: {}", persistEx.getMessage());
+                        }
+                        return jdbcTemplate.queryForMap(
+                                "SELECT * FROM workflow_runs WHERE id = ?::uuid", runId.toString());
+                    }
+
                     if ("FAILED".equals(r.status())) {
                         finalStatus = "FAILED";
                         break;

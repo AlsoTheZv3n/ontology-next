@@ -17,7 +17,12 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class WaitStep implements WorkflowStepExecutor {
 
-    static final long MAX_WAIT_MS = 10_000L;
+    /** Cap on inline waits — anything longer than this is converted to a PAUSE. */
+    static final long INLINE_WAIT_THRESHOLD_MS = 2_000L;
+    /** Hard cap on inline waits even when PAUSE is unavailable (defence in depth). */
+    static final long MAX_INLINE_MS = 10_000L;
+    /** Special StepResult status that tells WorkflowService to persist + resume later. */
+    public static final String STATUS_PAUSE = "PAUSE";
 
     private final ObjectMapper mapper;
 
@@ -27,7 +32,19 @@ public class WaitStep implements WorkflowStepExecutor {
     public StepResult execute(JsonNode cfg, WorkflowContext ctx) {
         long requested = cfg.path("durationMs").asLong(0);
         if (requested < 0) return StepResult.fail("durationMs must be >= 0");
-        long ms = Math.min(requested, MAX_WAIT_MS);
+
+        // Long waits are deferred: emit a PAUSE result with a resume timestamp.
+        // WorkflowService recognises the special status and persists the run as
+        // PAUSED with resume_at — WorkflowResumeScheduler picks it up later.
+        if (requested > INLINE_WAIT_THRESHOLD_MS) {
+            ObjectNode out = mapper.createObjectNode();
+            out.put("waitedMs", 0);
+            out.put("pauseUntilMs", System.currentTimeMillis() + requested);
+            out.put("requestedMs", requested);
+            return new StepResult(STATUS_PAUSE, out, null);
+        }
+
+        long ms = Math.min(requested, MAX_INLINE_MS);
         try {
             if (ms > 0) Thread.sleep(ms);
         } catch (InterruptedException e) {
@@ -36,7 +53,6 @@ public class WaitStep implements WorkflowStepExecutor {
         }
         ObjectNode out = mapper.createObjectNode();
         out.put("waitedMs", ms);
-        if (ms < requested) out.put("cappedFrom", requested);
         return StepResult.ok(out);
     }
 }
