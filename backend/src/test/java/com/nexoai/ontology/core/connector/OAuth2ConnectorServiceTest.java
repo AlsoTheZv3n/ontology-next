@@ -52,7 +52,7 @@ class OAuth2ConnectorServiceTest {
         jdbc = mock(JdbcTemplate.class);
         byte[] key = new byte[32];
         new java.security.SecureRandom().nextBytes(key);
-        crypto = new CryptoService(java.util.Base64.getEncoder().encodeToString(key));
+        crypto = new CryptoService(java.util.Base64.getEncoder().encodeToString(key), "");
         mapper = new ObjectMapper();
         service = new OAuth2ConnectorService(jdbc, crypto, mapper, HttpClient.newHttpClient());
         ReflectionTestUtils.setField(service, "baseUrl", "http://localhost:8081");

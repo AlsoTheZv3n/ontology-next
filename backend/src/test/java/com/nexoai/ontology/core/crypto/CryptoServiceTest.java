@@ -64,16 +64,16 @@ class CryptoServiceTest {
 
     @Test
     void missing_key_fails_fast() {
-        assertThatThrownBy(() -> new CryptoService(""))
+        assertThatThrownBy(() -> new CryptoService("", ""))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("required");
-        assertThatThrownBy(() -> new CryptoService((String) null))
+        assertThatThrownBy(() -> new CryptoService((String) null, ""))
                 .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
     void invalid_base64_fails_fast() {
-        assertThatThrownBy(() -> new CryptoService("not base64 !!!"))
+        assertThatThrownBy(() -> new CryptoService("not base64 !!!", ""))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -81,9 +81,42 @@ class CryptoServiceTest {
     void wrong_length_key_fails_fast() {
         // 16 bytes is AES-128, not AES-256 — reject.
         String b64 = Base64.getEncoder().encodeToString(new byte[16]);
-        assertThatThrownBy(() -> new CryptoService(b64))
+        assertThatThrownBy(() -> new CryptoService(b64, ""))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("32 bytes");
+    }
+
+    @Test
+    void legacy_key_can_decrypt_what_old_active_key_wrote() {
+        byte[] oldRaw = randomKey();
+        byte[] newRaw = randomKey();
+
+        // Operator's pre-rotation deploy: encrypted with oldRaw.
+        CryptoService oldSvc = new CryptoService(oldRaw);
+        String ct = oldSvc.encrypt("oauth-secret");
+
+        // Post-rotation: newRaw is active, oldRaw is in the legacy pool.
+        CryptoService rotated = new CryptoService(newRaw, java.util.List.of(oldRaw));
+        assertThat(rotated.decrypt(ct)).isEqualTo("oauth-secret");
+
+        // New writes use the active key — and rotated can read its own writes too.
+        String fresh = rotated.encrypt("new-secret");
+        assertThat(rotated.decrypt(fresh)).isEqualTo("new-secret");
+    }
+
+    @Test
+    void decrypt_fails_when_neither_active_nor_any_legacy_key_works() {
+        byte[] writerKey = randomKey();
+        byte[] activeKey = randomKey();
+        byte[] otherLegacyKey = randomKey();
+
+        String ct = new CryptoService(writerKey).encrypt("secret");
+
+        // Active and legacy don't include writerKey.
+        CryptoService svc = new CryptoService(activeKey, java.util.List.of(otherLegacyKey));
+        assertThatThrownBy(() -> svc.decrypt(ct))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("all configured keys");
     }
 
     @Test
