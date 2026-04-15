@@ -55,6 +55,12 @@ nexo:
     enabled: ${CDC_ENABLED:false}
   security:
     auth-enforced: ${AUTH_ENFORCED:false}
+  encryption:
+    # Base64 of 32 random bytes. Generate with: openssl rand -base64 32
+    # Rotating this key invalidates all encrypted secrets (OAuth tokens, etc.)
+    # The dev fallback below is deterministic so local stacks can decrypt across restarts.
+    # NEVER use the fallback in production — set NEXO_ENCRYPTION_KEY explicitly.
+    key: ${NEXO_ENCRYPTION_KEY:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
   ml:
     model-path: ${NEXO_ML_MODEL_PATH:}
     fail-fast: ${NEXO_ML_FAIL_FAST:false}
