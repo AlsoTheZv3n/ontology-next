@@ -62,6 +62,29 @@ public class OntologyObjectService {
         return toDomain(entity, typeName);
     }
 
+    /**
+     * Follow the merged_into chain so external references to a merged-away
+     * loser still resolve to the current winner. Returns empty if the final
+     * object is itself soft-deleted without a merge target, or if the chain
+     * has a cycle (defensive cap at 10 hops).
+     */
+    @Transactional(readOnly = true)
+    public Optional<OntologyObject> findEffective(UUID id) {
+        UUID current = id;
+        int hops = 0;
+        while (current != null && hops++ < 10) {
+            var entity = objectRepository.findById(current);
+            if (entity.isEmpty()) return Optional.empty();
+            var e = entity.get();
+            if (e.getMergedInto() == null) {
+                if (e.getDeletedAt() != null) return Optional.empty();
+                return Optional.of(toDomain(e, resolveObjectTypeName(e.getObjectTypeId())));
+            }
+            current = e.getMergedInto();
+        }
+        return Optional.empty();
+    }
+
     @Transactional(readOnly = true)
     public ObjectPage searchObjects(String objectTypeName, int limit, String cursor) {
         var objectType = objectTypeRepository.findByIsActiveTrue().stream()

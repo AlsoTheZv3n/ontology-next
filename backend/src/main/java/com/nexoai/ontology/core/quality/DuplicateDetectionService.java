@@ -90,12 +90,16 @@ public class DuplicateDetectionService {
      * Confirm a duplicate candidate by merging loser → winner:
      *   - Re-point every object_links row that references the loser as source/target.
      *     ON CONFLICT the loser-links are silently dropped (already connected via winner).
-     *   - Delete the loser row.
+     *   - Soft-delete the loser row: set deleted_at + merged_into + merged_at + merged_by.
+     *     The row stays in the table so external references (URLs, cached IDs,
+     *     audit logs) can still resolve to the winner via the merged_into redirect,
+     *     and an operator can call {@link #unmerge} to restore it.
      *   - Stamp the resolution_decision AUTO_MERGED.
      *
-     * Hard delete is chosen intentionally: without a merged_into column in
-     * ontology_objects, soft delete would leave orphan rows that look live to
-     * consumers. Adding soft-delete support is a schema change tracked separately.
+     * Soft-delete was introduced in V29 specifically to make this reversible —
+     * the previous hard-delete implementation was flagged as red-05 in the
+     * audit because a wrong merge (operator vertauschte winner/loser) had no
+     * recovery path.
      */
     @Transactional
     public void confirmMerge(UUID decisionId, UUID winnerId, String resolvedBy) {
@@ -135,8 +139,18 @@ public class DuplicateDetectionService {
         // Delete any links that could not be re-pointed (duplicate winner link already existed).
         jdbc.update("DELETE FROM object_links WHERE source_id = ?::uuid OR target_id = ?::uuid",
                 loserId.toString(), loserId.toString());
-        // Remove the loser object itself.
-        objectRepository.deleteById(loserId);
+
+        // Soft-delete the loser. Active reads filter deleted_at IS NULL; merge
+        // redirects use merged_into (see OntologyObjectService.findEffective).
+        jdbc.update("""
+                UPDATE ontology_objects
+                   SET deleted_at = NOW(),
+                       merged_into = ?::uuid,
+                       merged_at = NOW(),
+                       merged_by = ?
+                 WHERE id = ?::uuid
+                """,
+                winnerId.toString(), resolvedBy, loserId.toString());
 
         jdbc.update("""
                 UPDATE resolution_decisions
@@ -144,6 +158,44 @@ public class DuplicateDetectionService {
                  WHERE id = ?::uuid
                 """, resolvedBy, decisionId.toString());
         log.info("Merged loser={} into winner={} (decision={})", loserId, winnerId, decisionId);
+    }
+
+    /**
+     * Revert a confirmed merge. Clears deleted_at / merged_into on the loser
+     * and flips the resolution_decision back to REJECTED so the pair stays
+     * visible in the review queue but won't auto-re-merge.
+     *
+     * <p>Does NOT try to reconstruct the link graph that was re-pointed during
+     * {@link #confirmMerge} — restoring those would require a separate change
+     * log. For most use cases (wrong-direction merge, quick manual undo) the
+     * winner already holds the right links and unmerging gives the loser back
+     * as a standalone object to investigate.
+     */
+    @Transactional
+    public void unmerge(UUID decisionId, String resolvedBy) {
+        var decision = jdbc.queryForMap("""
+                SELECT candidate_a_id, candidate_b_id
+                  FROM resolution_decisions
+                 WHERE id = ?::uuid
+                """, decisionId.toString());
+        UUID a = UUID.fromString(decision.get("candidate_a_id").toString());
+        UUID b = UUID.fromString(decision.get("candidate_b_id").toString());
+        // Whichever side was soft-deleted gets restored.
+        int restored = jdbc.update("""
+                UPDATE ontology_objects
+                   SET deleted_at = NULL,
+                       merged_into = NULL,
+                       merged_at = NULL,
+                       merged_by = NULL
+                 WHERE id IN (?::uuid, ?::uuid)
+                   AND deleted_at IS NOT NULL
+                """, a.toString(), b.toString());
+        jdbc.update("""
+                UPDATE resolution_decisions
+                   SET status = 'REJECTED', resolved_at = NOW(), resolved_by = ?
+                 WHERE id = ?::uuid
+                """, resolvedBy, decisionId.toString());
+        log.info("Unmerged decision={} (restored {} objects)", decisionId, restored);
     }
 
     private OntologyObject toDomain(OntologyObjectEntity e, UUID objectTypeId) {

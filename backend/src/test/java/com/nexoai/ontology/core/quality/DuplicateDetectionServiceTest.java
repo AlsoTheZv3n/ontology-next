@@ -97,7 +97,7 @@ class DuplicateDetectionServiceTest {
     }
 
     @Test
-    void confirmMerge_repoints_links_and_deletes_loser() {
+    void confirmMerge_repoints_links_and_soft_deletes_loser() {
         UUID winner = UUID.randomUUID();
         UUID loser = UUID.randomUUID();
         UUID decisionId = UUID.randomUUID();
@@ -112,9 +112,36 @@ class DuplicateDetectionServiceTest {
 
         service.confirmMerge(decisionId, winner, "alice");
 
-        // 2 UPDATE statements (source, target re-point) + 1 DELETE links + 1 UPDATE decision
-        verify(jdbc, atLeast(3)).update(anyString(), any(Object[].class));
-        verify(objectRepository).deleteById(loser);
+        // Expect a soft-delete UPDATE on ontology_objects, not a hard delete.
+        verify(jdbc).update(
+                argThat((String sql) -> sql != null
+                        && sql.contains("UPDATE ontology_objects")
+                        && sql.contains("deleted_at")
+                        && sql.contains("merged_into")),
+                eq(winner.toString()), eq("alice"), eq(loser.toString()));
+        verify(objectRepository, never()).deleteById(any(UUID.class));
+    }
+
+    @Test
+    void unmerge_clears_deleted_at_and_rejects_decision() {
+        UUID winner = UUID.randomUUID();
+        UUID loser = UUID.randomUUID();
+        UUID decisionId = UUID.randomUUID();
+        Map<String, Object> row = new HashMap<>();
+        row.put("candidate_a_id", winner.toString());
+        row.put("candidate_b_id", loser.toString());
+        when(jdbc.queryForMap(anyString(), eq(decisionId.toString()))).thenReturn(row);
+        when(jdbc.update(argThat((String sql) -> sql != null && sql.contains("deleted_at = NULL")),
+                anyString(), anyString())).thenReturn(1);
+
+        service.unmerge(decisionId, "bob");
+
+        verify(jdbc).update(
+                argThat((String sql) -> sql != null && sql.contains("deleted_at = NULL")),
+                eq(winner.toString()), eq(loser.toString()));
+        verify(jdbc).update(
+                argThat((String sql) -> sql != null && sql.contains("status = 'REJECTED'")),
+                eq("bob"), eq(decisionId.toString()));
     }
 
     @Test

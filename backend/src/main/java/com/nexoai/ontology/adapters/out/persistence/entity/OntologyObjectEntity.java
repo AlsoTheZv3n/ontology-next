@@ -53,4 +53,18 @@ public class OntologyObjectEntity {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private Instant updatedAt;
+
+    /** Soft-delete tombstone (V29). Reads of "active" objects MUST filter WHERE deleted_at IS NULL. */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
+    /** Points to the surviving winner after a merge so external references can redirect (V29). */
+    @Column(name = "merged_into")
+    private UUID mergedInto;
+
+    @Column(name = "merged_at")
+    private Instant mergedAt;
+
+    @Column(name = "merged_by")
+    private String mergedBy;
 }
