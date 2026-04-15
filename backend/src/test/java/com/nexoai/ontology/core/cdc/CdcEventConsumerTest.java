@@ -56,7 +56,8 @@ class CdcEventConsumerTest {
                 mock(JdbcTemplate.class),
                 dataSourceRepo,
                 objectRepo,
-                meterRegistry
+                meterRegistry,
+                mock(com.nexoai.ontology.core.lineage.LineageService.class)
         );
 
         dsId = UUID.randomUUID();

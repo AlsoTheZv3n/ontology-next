@@ -6,6 +6,7 @@ import com.nexoai.ontology.adapters.out.persistence.entity.OntologyObjectEntity;
 import com.nexoai.ontology.adapters.out.persistence.repository.JpaDataSourceRepository;
 import com.nexoai.ontology.adapters.out.persistence.repository.JpaOntologyObjectRepository;
 import com.nexoai.ontology.config.websocket.WebSocketPublisher;
+import com.nexoai.ontology.core.lineage.LineageService;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +21,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Consumes CDC events from Redis Streams.
@@ -39,6 +41,7 @@ public class CdcEventConsumer {
     private final JpaDataSourceRepository dataSourceRepository;
     private final JpaOntologyObjectRepository objectRepository;
     private final MeterRegistry meterRegistry;
+    private final LineageService lineageService;
 
     private static final String STREAM_KEY = "ontology:cdc";
     private static final String GROUP_NAME = "nexo-group";
@@ -124,9 +127,12 @@ public class CdcEventConsumer {
                     var existing = objectRepository.findByExternalIdAndDataSourceId(externalId, dataSource.getId());
                     if (existing.isPresent()) {
                         var entity = existing.get();
+                        JsonNode oldProps = parseQuietly(entity.getProperties());
                         entity.setProperties(payload.toString());
                         entity.setUpdatedAt(Instant.now());
-                        objectRepository.save(entity);
+                        var saved = objectRepository.save(entity);
+                        UUID savedId = saved != null ? saved.getId() : entity.getId();
+                        recordLineage(savedId, oldProps, payload, sourceTable);
                         log.info("CDC updated object externalId={}", externalId);
                         incrementCounter("nexo.cdc.events.processed", "op", "u");
                     } else {
@@ -138,7 +144,9 @@ public class CdcEventConsumer {
                                 .createdAt(Instant.now())
                                 .updatedAt(Instant.now())
                                 .build();
-                        objectRepository.save(entity);
+                        var saved = objectRepository.save(entity);
+                        UUID savedId = saved != null ? saved.getId() : entity.getId();
+                        recordLineage(savedId, null, payload, sourceTable);
                         log.info("CDC created object externalId={}", externalId);
                         incrementCounter("nexo.cdc.events.processed", "op", "c");
                     }
@@ -159,6 +167,35 @@ public class CdcEventConsumer {
     private static long parseLong(Object v) {
         if (v == null) return 0L;
         try { return Long.parseLong(String.valueOf(v)); } catch (NumberFormatException e) { return 0L; }
+    }
+
+    /**
+     * Best-effort JSON parse used for the "before" image of a CDC update.
+     * Returns null so LineageService.recordDiff treats every field in the
+     * after-image as newly-set (which is the correct semantic on a fresh
+     * upstream insert that we've just discovered as an update).
+     */
+    private JsonNode parseQuietly(String json) {
+        if (json == null || json.isBlank()) return null;
+        try { return objectMapper.readTree(json); } catch (Exception e) { return null; }
+    }
+
+    /**
+     * Wire per-field lineage for each CDC-driven mutation. Failure to record
+     * lineage must not break the consumer — the primary contract is that the
+     * object row stays up to date with the upstream source.
+     */
+    private void recordLineage(UUID objectId, JsonNode oldProps, JsonNode newProps, String sourceTable) {
+        if (lineageService == null || objectId == null || newProps == null) return;
+        try {
+            lineageService.recordDiff(objectId, oldProps, newProps,
+                    LineageService.SourceType.CDC,
+                    "cdc:" + (sourceTable == null ? "unknown" : sourceTable),
+                    sourceTable,
+                    "debezium");
+        } catch (Exception e) {
+            log.debug("CDC lineage write skipped: {}", e.getMessage());
+        }
     }
 
     private void moveToDeadLetterQueue(MapRecord<String, Object, Object> record, Exception error) {
