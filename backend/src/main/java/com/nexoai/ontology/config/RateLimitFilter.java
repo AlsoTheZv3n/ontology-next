@@ -58,6 +58,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         meterRegistry.counter("nexo.rate.limit.hits",
                 "plan", plan, "outcome", outcome.name().toLowerCase()).increment();
 
+        // ALLOW, FAIL_OPEN, and ALLOW_DEGRADED all pass through. Only BLOCK stops.
         if (outcome == RedisRateLimiter.Outcome.BLOCK) {
             response.setStatus(429);
             response.setHeader("Retry-After", "60");

@@ -2,26 +2,24 @@ package com.nexoai.ontology.core.ratelimit;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
 /**
- * Fixed-window counter on Redis. For each (key, windowSeconds) pair we INCR the
- * counter and — if we were the one that created it — EXPIRE it after the window.
- * The counter is shared across all backend instances pointing at the same Redis,
- * which is what the in-memory ConcurrentHashMap variant could not provide.
+ * Fixed-window counter on Redis, with a configurable behaviour when Redis is
+ * unavailable.
  *
- * Tradeoff vs. a token bucket: fixed-window means a tenant can burst up to
- * 2×limit across the boundary of two adjacent windows. For abuse prevention
- * that's acceptable; for SLA enforcement it's not. Sliding-window is a future
- * step (Redis sorted-set + ZADD/ZREMRANGEBYSCORE).
+ * {@link FailMode} controls what happens on a Redis exception:
+ *   FAIL_OPEN       — request passes through (no protection). Legacy behaviour.
+ *   FAIL_CLOSED     — request is blocked (protects backend, hurts availability).
+ *   LOCAL_FALLBACK  — per-JVM ConcurrentHashMap takes over (protection degraded
+ *                     but still present). Default — see red-04 audit finding.
  *
- * Fail-open: if Redis is unavailable the limiter returns ALLOW. A correctness-
- * critical rate limit would fail-closed, but the intent here is abuse
- * mitigation, so we'd rather serve traffic than 500 every request during an
- * incident. A metric counter tracks the fail-open so on-call can see it.
+ * Sliding-window is a future step — see prod-11 commit message for why
+ * fixed-window is adequate for the abuse-mitigation use case.
  */
 @Component
 @Slf4j
@@ -29,50 +27,64 @@ public class RedisRateLimiter {
 
     private final StringRedisTemplate redis;
     private final MeterRegistry meterRegistry;
+    private final LocalFallbackLimiter localFallback;
 
-    public RedisRateLimiter(StringRedisTemplate redis, MeterRegistry meterRegistry) {
+    @Value("${nexo.ratelimit.fail-mode:LOCAL_FALLBACK}")
+    private FailMode failMode;
+
+    public RedisRateLimiter(StringRedisTemplate redis, MeterRegistry meterRegistry,
+                             LocalFallbackLimiter localFallback) {
         this.redis = redis;
         this.meterRegistry = meterRegistry;
+        this.localFallback = localFallback;
     }
 
-    public enum Outcome { ALLOW, BLOCK, FAIL_OPEN }
+    public enum FailMode { FAIL_OPEN, FAIL_CLOSED, LOCAL_FALLBACK }
 
-    /**
-     * Try to consume one unit against the counter at {@code key}. If the count
-     * after INCR exceeds {@code limit}, the request is blocked.
-     *
-     * @param key       Redis key, typically "ratelimit:{tenantId}"
-     * @param limit     max units per window
-     * @param window    length of the window (TTL set on the key)
-     */
+    public enum Outcome {
+        ALLOW,
+        BLOCK,
+        /** Redis down, FAIL_OPEN configured — request passed through without check. */
+        FAIL_OPEN,
+        /** Redis down, LOCAL_FALLBACK accepted the request (per-JVM counter). */
+        ALLOW_DEGRADED
+    }
+
     public Outcome tryConsume(String key, long limit, Duration window) {
         try {
             Long count = redis.opsForValue().increment(key);
             if (count == null) {
-                return failOpen("null count from INCR");
+                return onRedisFailure(key, limit, window, "null count from INCR");
             }
             if (count == 1L) {
-                // First hit in this window — stamp a TTL so the key eventually disappears.
                 redis.expire(key, window);
             }
             return count <= limit ? Outcome.ALLOW : Outcome.BLOCK;
         } catch (Exception e) {
-            return failOpen(e.getMessage());
+            return onRedisFailure(key, limit, window, e.getMessage());
         }
     }
 
-    /** Drop the counter for a key — used on plan upgrade so the new limit applies immediately. */
     public void reset(String key) {
         try { redis.delete(key); } catch (Exception e) {
             log.debug("rate limit reset failed for {}: {}", key, e.getMessage());
         }
     }
 
-    private Outcome failOpen(String reason) {
-        log.warn("rate-limit backend unavailable, failing open: {}", reason);
+    private Outcome onRedisFailure(String key, long limit, Duration window, String reason) {
         if (meterRegistry != null) {
             meterRegistry.counter("nexo.rate.limit.redis_errors").increment();
         }
-        return Outcome.FAIL_OPEN;
+        log.warn("rate-limit backend unavailable (mode={}): {}", failMode, reason);
+        return switch (failMode) {
+            case FAIL_OPEN -> Outcome.FAIL_OPEN;
+            case FAIL_CLOSED -> Outcome.BLOCK;
+            case LOCAL_FALLBACK -> localFallback.tryConsume(key, limit, window)
+                    ? Outcome.ALLOW_DEGRADED
+                    : Outcome.BLOCK;
+        };
     }
+
+    // Exposed for tests — production flips this via @Value.
+    void setFailMode(FailMode mode) { this.failMode = mode; }
 }

@@ -36,7 +36,9 @@ class RedisRateLimiterTest {
         valueOps = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(valueOps);
         metrics = new SimpleMeterRegistry();
-        limiter = new RedisRateLimiter(redis, metrics);
+        limiter = new RedisRateLimiter(redis, metrics, new LocalFallbackLimiter());
+        // Tests that pre-date red-04 expect FAIL_OPEN behaviour on Redis errors.
+        limiter.setFailMode(RedisRateLimiter.FailMode.FAIL_OPEN);
         counter = new AtomicLong(0);
         when(valueOps.increment(anyString())).thenAnswer(inv -> counter.incrementAndGet());
     }
@@ -101,5 +103,41 @@ class RedisRateLimiterTest {
     void reset_swallows_errors() {
         doThrow(new RuntimeException("boom")).when(redis).delete(anyString());
         limiter.reset("k"); // should not throw
+    }
+
+    @Test
+    void fail_mode_LOCAL_FALLBACK_uses_in_memory_counter() {
+        limiter.setFailMode(RedisRateLimiter.FailMode.LOCAL_FALLBACK);
+        when(valueOps.increment(anyString()))
+                .thenThrow(new RuntimeException("redis down"));
+
+        // First {limit} requests pass via fallback.
+        for (int i = 0; i < 3; i++) {
+            assertThat(limiter.tryConsume("k", 3, Duration.ofMinutes(1)))
+                    .isEqualTo(RedisRateLimiter.Outcome.ALLOW_DEGRADED);
+        }
+        // Beyond the limit, fallback blocks even in degraded mode.
+        assertThat(limiter.tryConsume("k", 3, Duration.ofMinutes(1)))
+                .isEqualTo(RedisRateLimiter.Outcome.BLOCK);
+    }
+
+    @Test
+    void fail_mode_FAIL_CLOSED_blocks_when_redis_throws() {
+        limiter.setFailMode(RedisRateLimiter.FailMode.FAIL_CLOSED);
+        when(valueOps.increment(anyString()))
+                .thenThrow(new RuntimeException("redis down"));
+
+        assertThat(limiter.tryConsume("k", 60, Duration.ofMinutes(1)))
+                .isEqualTo(RedisRateLimiter.Outcome.BLOCK);
+    }
+
+    @Test
+    void fail_mode_FAIL_OPEN_passes_through_when_redis_throws() {
+        limiter.setFailMode(RedisRateLimiter.FailMode.FAIL_OPEN);
+        when(valueOps.increment(anyString()))
+                .thenThrow(new RuntimeException("redis down"));
+
+        assertThat(limiter.tryConsume("k", 60, Duration.ofMinutes(1)))
+                .isEqualTo(RedisRateLimiter.Outcome.FAIL_OPEN);
     }
 }
