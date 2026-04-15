@@ -125,16 +125,33 @@ public class GdprErasureService {
     private EraseReport scanAndMaybeErase(String email, boolean dryRun, UUID logId) {
         String lower = email.toLowerCase(Locale.ROOT);
 
-        // ILIKE pre-filter narrows candidates before the exact JSON walk.
+        // Prefer the indexed jsonpath path (V30 GIN index on jsonb_path_ops).
+        // jsonpath's @? operator with $.** ?(@ == ...) hits the index and returns
+        // any object whose JSON tree contains this value at any depth.
+        //
+        // Fall back to ILIKE for substring matches (e.g. email embedded in a
+        // free-text comment). The OR is planner-friendly: Postgres can do a
+        // bitmap-or between the indexed rows and the sequential scan.
         List<Map<String, Object>> rows;
+        String jsonPathLiteral = "$.** ? (@ == \"" + lower.replace("\"", "\\\"") + "\")";
         try {
             rows = jdbc.queryForList("""
                     SELECT id, properties FROM ontology_objects
-                     WHERE properties::text ILIKE ?
-                    """, "%" + lower + "%");
+                     WHERE properties @? ?::jsonpath
+                        OR properties::text ILIKE ?
+                    """, jsonPathLiteral, "%" + lower + "%");
         } catch (Exception e) {
-            log.error("GDPR scan failed: {}", e.getMessage());
-            return new EraseReport(logId, 0, 0, List.of(), dryRun);
+            // Older Postgres or failed index — fall back to plain ILIKE.
+            log.debug("GDPR scan falling back to ILIKE-only: {}", e.getMessage());
+            try {
+                rows = jdbc.queryForList("""
+                        SELECT id, properties FROM ontology_objects
+                         WHERE properties::text ILIKE ?
+                        """, "%" + lower + "%");
+            } catch (Exception ex) {
+                log.error("GDPR scan failed: {}", ex.getMessage());
+                return new EraseReport(logId, 0, 0, List.of(), dryRun);
+            }
         }
 
         List<UUID> ids = new ArrayList<>();
